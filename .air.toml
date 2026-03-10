@@ -1,0 +1,23 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin = "./bin/ibis"
+  cmd = "go build -o ./bin/ibis ./cmd/ibis"
+  args_bin = ["run"]
+  delay = 1000
+  exclude_dir = ["bin", "tmp", "data", "vendor", "docs", "scripts"]
+  exclude_file = []
+  exclude_regex = ["_test.go"]
+  exclude_unchanged = false
+  follow_symlink = false
+  include_ext = ["go", "yaml", "yml"]
+  kill_delay = "1s"
+  send_interrupt = true
+  stop_on_error = true
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

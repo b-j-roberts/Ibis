@@ -27,6 +27,9 @@ data/
 *.swp
 *.swo
 
+# Air (hot reload)
+tmp/
+
 # OS
 .DS_Store
 Thumbs.db
