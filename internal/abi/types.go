@@ -1,6 +1,8 @@
 package abi
 
 import (
+	"encoding/json"
+
 	"github.com/NethermindEth/juno/core/felt"
 )
 
@@ -119,6 +121,7 @@ type RawParam struct {
 }
 
 // ContractClassJSON represents the top-level structure of a .contract_class.json file.
+// The ABI field can be either a JSON string (Cairo compiler <2.7.0) or a JSON array (>=2.7.0).
 type ContractClassJSON struct {
-	ABI string `json:"abi"` // String-encoded JSON array of ABI entries
+	ABI json.RawMessage `json:"abi"` // String-encoded or direct JSON array of ABI entries
 }

@@ -24,17 +24,27 @@ func ParseFile(path string) (*ABI, error) {
 	return Parse(data)
 }
 
-// Parse parses Cairo ABI JSON data. Handles both:
-//   - Contract class JSON: {"abi": "[{...}]", "sierra_program": [...], ...}
+// Parse parses Cairo ABI JSON data. Handles three formats:
+//   - Contract class JSON with string ABI (compiler <2.7.0): {"abi": "[{...}]", ...}
+//   - Contract class JSON with array ABI (compiler >=2.7.0): {"abi": [{...}], ...}
 //   - Raw ABI JSON array: [{...}, {...}, ...]
 func Parse(data []byte) (*ABI, error) {
 	var rawEntries []RawABIEntry
 
-	// Try contract_class.json format first (ABI is a string field).
+	// Try contract_class.json format first (has "abi" field).
 	var classJSON ContractClassJSON
-	if err := json.Unmarshal(data, &classJSON); err == nil && classJSON.ABI != "" {
-		if err := json.Unmarshal([]byte(classJSON.ABI), &rawEntries); err != nil {
-			return nil, fmt.Errorf("parsing ABI string from contract class: %w", err)
+	if err := json.Unmarshal(data, &classJSON); err == nil && len(classJSON.ABI) > 0 {
+		abiData := classJSON.ABI
+
+		// If the ABI field is a JSON string, unwrap it first.
+		var abiStr string
+		if json.Unmarshal(abiData, &abiStr) == nil {
+			abiData = []byte(abiStr)
+		}
+
+		// Parse the ABI entries (now always a JSON array).
+		if err := json.Unmarshal(abiData, &rawEntries); err != nil {
+			return nil, fmt.Errorf("parsing ABI from contract class: %w", err)
 		}
 	} else {
 		// Try raw ABI JSON array.

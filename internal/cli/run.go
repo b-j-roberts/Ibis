@@ -27,6 +27,23 @@ var runCmd = &cobra.Command{
 			fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s): %d events\n", c.Name, c.Address, len(c.Events))
 		}
 
+		// Resolve ABIs for all contracts at startup.
+		// TODO: pass a real ABIFetcher once provider is implemented (task 2.5)
+		resolver := config.NewABIResolver(nil)
+		abis, err := resolver.ResolveAll(cmd.Context(), cfg.Contracts)
+		if err != nil {
+			return fmt.Errorf("resolving ABIs: %w", err)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "\nResolved %d contract ABIs:\n", len(abis))
+		for _, c := range cfg.Contracts {
+			parsed := abis[c.Address]
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: %d events\n", c.Name, len(parsed.Events))
+			for _, ev := range parsed.Events {
+				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (selector: 0x%s)\n", ev.Name, ev.Selector.Text(16))
+			}
+		}
+
 		// TODO: start indexing engine (task 2.6)
 		fmt.Fprintln(cmd.OutOrStdout(), "\nIndexing engine not yet implemented (task 2.6)")
 		return nil
