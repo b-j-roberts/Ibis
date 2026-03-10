@@ -522,36 +522,32 @@ func (s *BadgerStore) loadSchemas() error {
 // parseEventKey extracts block number and log index from a primary or reverse key.
 func (s *BadgerStore) parseEventKey(key []byte, evt *types.IndexedEvent, reverse bool) {
 	// Key format: prefix{table}:{8-byte block}:{8-byte logIndex}
-	keyStr := string(key)
-	var prefix string
+	// Parse from the end using fixed offsets to avoid mis-splitting on ':'
+	// bytes (0x3A) that may appear inside the 8-byte binary encodings.
+	var prefixLen int
 	if reverse {
-		prefix = prefixRev
+		prefixLen = len(prefixRev)
 	} else {
-		prefix = prefixEvt
+		prefixLen = len(prefixEvt)
 	}
 
-	rest := keyStr[len(prefix):]
-	// Find table name (everything before the first ':' after prefix).
-	parts := strings.SplitN(rest, ":", 3)
-	if len(parts) < 3 {
+	rest := key[prefixLen:]
+
+	// Fixed suffix: ':'(1) + block(8) + ':'(1) + logIndex(8) = 18 bytes
+	if len(rest) < 18 {
 		return
 	}
 
-	blockBytes := []byte(parts[1])
-	logBytes := []byte(parts[2])
+	logBytes := rest[len(rest)-8:]
+	blockBytes := rest[len(rest)-17 : len(rest)-9]
 
-	if len(blockBytes) == 8 {
-		block := binary.BigEndian.Uint64(blockBytes)
-		if reverse {
-			block = invertBlock(block)
-		}
-		evt.BlockNumber = block
+	block := binary.BigEndian.Uint64(blockBytes)
+	if reverse {
+		block = invertBlock(block)
 	}
-	if len(logBytes) == 8 {
-		evt.LogIndex = binary.BigEndian.Uint64(logBytes)
-	}
+	evt.BlockNumber = block
+	evt.LogIndex = binary.BigEndian.Uint64(logBytes)
 
-	// Populate other fields from data if present.
 	s.populateFromData(evt)
 }
 
