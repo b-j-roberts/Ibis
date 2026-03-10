@@ -121,7 +121,7 @@ func validateContractAddress(addr string) error {
 		return fmt.Errorf("must start with 0x")
 	}
 	hex := addr[2:]
-	if len(hex) == 0 || len(hex) > 64 {
+	if hex == "" || len(hex) > 64 {
 		return fmt.Errorf("hex part must be 1-64 characters")
 	}
 	for _, c := range hex {

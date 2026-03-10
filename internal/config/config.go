@@ -11,11 +11,11 @@ import (
 
 // Config is the top-level ibis configuration.
 type Config struct {
-	Network   string          `yaml:"network"`
-	RPC       string          `yaml:"rpc"`
-	Database  DatabaseConfig  `yaml:"database"`
-	API       APIConfig       `yaml:"api"`
-	Indexer   IndexerConfig   `yaml:"indexer"`
+	Network   string           `yaml:"network"`
+	RPC       string           `yaml:"rpc"`
+	Database  DatabaseConfig   `yaml:"database"`
+	API       APIConfig        `yaml:"api"`
+	Indexer   IndexerConfig    `yaml:"indexer"`
 	Contracts []ContractConfig `yaml:"contracts"`
 }
 
@@ -61,8 +61,8 @@ type EventConfig struct {
 }
 
 type TableConfig struct {
-	Type       string          `yaml:"type"`
-	UniqueKey  string          `yaml:"unique_key"`
+	Type       string            `yaml:"type"`
+	UniqueKey  string            `yaml:"unique_key"`
 	Aggregates []AggregateConfig `yaml:"aggregate"`
 }
 

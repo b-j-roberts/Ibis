@@ -3,8 +3,9 @@ package cli
 import (
 	"fmt"
 
-	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/spf13/cobra"
+
+	"github.com/b-j-roberts/ibis/internal/config"
 )
 
 var runCmd = &cobra.Command{
