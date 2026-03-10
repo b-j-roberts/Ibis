@@ -1,0 +1,72 @@
+# ibis.config.yaml - Ibis Starknet Indexer Configuration
+#
+# Environment variables can be referenced with ${VAR_NAME} syntax.
+# Example: password: ${IBIS_DB_PASSWORD}
+
+# Network to connect to: mainnet | sepolia | custom
+network: mainnet
+
+# Starknet RPC endpoint (WSS preferred for real-time subscriptions, HTTP for polling fallback)
+rpc: ${IBIS_RPC_URL}
+
+# Database backend configuration
+database:
+  # Backend type: postgres | badger | memory
+  backend: postgres
+  postgres:
+    host: ${IBIS_DB_HOST}
+    port: 5432
+    user: ${IBIS_DB_USER}
+    password: ${IBIS_DB_PASSWORD}
+    name: ${IBIS_DB_NAME}
+  # BadgerDB embedded store (alternative to postgres)
+  # badger:
+  #   path: ./data/ibis
+
+# REST API server configuration
+api:
+  host: 0.0.0.0
+  port: 8080
+
+# Indexer behavior
+indexer:
+  start_block: 0       # 0 = start from latest block, or specify a block number
+  pending_blocks: true  # Index pre-confirmed (pending) blocks
+  batch_size: 10        # Blocks per batch during backfill
+
+# Contracts to index
+contracts:
+  - name: MyContract
+    address: "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
+
+    # ABI resolution:
+    #   - Explicit path: ./target/dev/package_Contract.contract_class.json
+    #   - Smart discovery: ContractName (searches target/dev/, runs scarb build if needed)
+    #   - Chain fetch: fetch (fetches ABI from deployed contract via RPC)
+    abi: fetch
+
+    events:
+      # Wildcard: index ALL events from this contract as log tables
+      - name: "*"
+        table:
+          type: log
+
+      # Override specific events with custom table types:
+      #
+      # Unique table - keeps latest entry per unique key
+      # - name: LeaderboardUpdate
+      #   table:
+      #     type: unique
+      #     unique_key: trader_address
+      #
+      # Aggregation table - auto-computes aggregates
+      # - name: VolumeUpdate
+      #   table:
+      #     type: aggregation
+      #     aggregate:
+      #       - column: total_volume
+      #         operation: sum       # sum | count | avg
+      #         field: volume
+      #       - column: trade_count
+      #         operation: count
+      #         field: volume
