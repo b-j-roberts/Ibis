@@ -71,6 +71,23 @@
 - Use `goreleaser` for cross-platform binary builds and release automation
 - Cache Go modules and build cache in CI for speed
 
+### 1.5 Project Documents
+
+**Description**: Create the essential project root documents — README.md, CLAUDE.md, and MIT LICENSE. The README establishes the project vision with architecture overview, feature list, and usage examples. CLAUDE.md provides Claude Code with project-specific context for effective AI-assisted development. The LICENSE file formalizes open-source terms.
+
+**Requirements**:
+- [ ] `README.md` with project overview, problem statement, feature highlights, architecture diagram (from SPEC.md), installation instructions (placeholders), usage examples (`ibis init`, `ibis run`, `ibis query`), config file example, API example, contributing pointer, and license badge
+- [ ] `CLAUDE.md` with build/test/lint commands (from Makefile targets), project structure overview, key architectural patterns (store interface, operation pairs, ABI-driven schemas), tech stack summary, and pointers to SPEC.md and ROADMAP.md for deeper context
+- [ ] `LICENSE` file with full MIT License text, copyright `2025 Brandon Roberts`
+- [ ] README should reference the MIT license with a badge at the top
+- [ ] CLAUDE.md should be usable immediately once task 1.1 (Go module scaffolding) and 1.2 (Makefile) land — reference the planned commands even if not yet implemented
+
+**Implementation Notes**:
+- Pull architecture diagram and feature descriptions from `docs/SPEC.md` — keep README concise and link to SPEC for deep dives
+- CLAUDE.md follows the pattern from Brandon's workspace root `CLAUDE.md` — table of projects, key commands, architecture notes
+- For the README, use shields.io badges for license, Go version, and build status (GitHub Actions URL can be placeholder until 1.4 lands)
+- Keep README under ~200 lines — enough to sell the project vision without overwhelming; link to `docs/` for details
+
 ---
 
 ## Phase 2: MVP
