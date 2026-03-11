@@ -47,6 +47,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Subscribe before flushing headers so no events are lost between the
+	// client receiving the response and the handler entering the event loop.
+	subID, ch := s.bus.Subscribe(schema.Name, filters)
+	defer s.bus.Unsubscribe(subID)
+
 	// Set SSE headers.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -58,10 +63,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if lastID := r.Header.Get("Last-Event-ID"); lastID != "" {
 		s.replayEvents(w, flusher, schema.Name, lastID, filters)
 	}
-
-	// Subscribe to the event bus for this table.
-	subID, ch := s.bus.Subscribe(schema.Name, filters)
-	defer s.bus.Unsubscribe(subID)
 
 	s.logger.Info("SSE client connected",
 		"contract", contract,

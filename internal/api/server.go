@@ -86,7 +86,9 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		s.server.Shutdown(shutdownCtx)
+		if err := s.server.Shutdown(shutdownCtx); err != nil {
+			s.logger.Error("HTTP server shutdown error", "error", err)
+		}
 	}()
 
 	if err := s.server.ListenAndServe(); err != http.ErrServerClosed {
@@ -190,7 +192,7 @@ func (rw *responseWriter) Flush() {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

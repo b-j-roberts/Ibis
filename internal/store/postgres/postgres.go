@@ -79,7 +79,7 @@ func (s *PostgresStore) ApplyOperations(ctx context.Context, ops []store.Operati
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	// Collect aggregation deltas per table.
 	aggDeltas := make(map[string][]aggDelta)
@@ -437,7 +437,9 @@ func (s *PostgresStore) GetCursor(ctx context.Context) (uint64, error) {
 	}
 
 	var cursor uint64
-	fmt.Sscanf(val, "%d", &cursor)
+	if _, err := fmt.Sscanf(val, "%d", &cursor); err != nil {
+		return 0, fmt.Errorf("parsing cursor value %q: %w", val, err)
+	}
 	return cursor, nil
 }
 
