@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/store/badger"
 	"github.com/b-j-roberts/ibis/internal/store/memory"
+	"github.com/b-j-roberts/ibis/internal/store/postgres"
 )
 
 var runCmd = &cobra.Command{
@@ -84,7 +86,13 @@ func createStore(cfg *config.Config, logger *slog.Logger) (store.Store, error) {
 		logger.Info("using BadgerDB store", "path", path)
 		return badger.New(path)
 	case "postgres":
-		return nil, fmt.Errorf("PostgreSQL store not yet implemented (task 2.8)")
+		logger.Info("using PostgreSQL store",
+			"host", cfg.Database.Postgres.Host,
+			"port", cfg.Database.Postgres.Port,
+			"database", cfg.Database.Postgres.Name,
+		)
+		ctx := context.Background()
+		return postgres.New(ctx, cfg.Database.Postgres)
 	default:
 		return nil, fmt.Errorf("unknown database backend: %s", cfg.Database.Backend)
 	}
