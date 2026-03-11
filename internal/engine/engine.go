@@ -11,6 +11,7 @@ import (
 	"github.com/b-j-roberts/ibis/internal/abi"
 	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/provider"
+	"github.com/b-j-roberts/ibis/internal/schema"
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/types"
 )
@@ -149,7 +150,7 @@ func (e *Engine) setup(ctx context.Context) error {
 		}
 
 		registry := abi.NewEventRegistry(contractABI)
-		schemas := buildSchemas(cc, contractABI, registry)
+		schemas := schema.BuildSchemas(cc, contractABI, registry)
 
 		// Parse contract address.
 		address, err := new(felt.Felt).SetString(cc.Address)

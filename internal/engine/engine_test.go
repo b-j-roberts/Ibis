@@ -11,6 +11,7 @@ import (
 	"github.com/b-j-roberts/ibis/internal/abi"
 	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/provider"
+	"github.com/b-j-roberts/ibis/internal/schema"
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/store/memory"
 	"github.com/b-j-roberts/ibis/internal/types"
@@ -52,6 +53,7 @@ func testContractState(address *felt.Felt, contractName string, events []*abi.Ev
 				{Name: "block_number", Type: "uint64"},
 				{Name: "transaction_hash", Type: "string"},
 				{Name: "log_index", Type: "uint64"},
+				{Name: "timestamp", Type: "uint64"},
 				{Name: "contract_address", Type: "string"},
 				{Name: "event_name", Type: "string"},
 				{Name: "status", Type: "string"},
@@ -490,7 +492,7 @@ func TestBuildSchemas_ExplicitEvents(t *testing.T) {
 		},
 	}
 
-	schemas := buildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(cc, parsedABI, registry)
 
 	if len(schemas) != 1 {
 		t.Fatalf("expected 1 schema, got %d", len(schemas))
@@ -521,7 +523,7 @@ func TestBuildSchemas_Wildcard(t *testing.T) {
 		},
 	}
 
-	schemas := buildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(cc, parsedABI, registry)
 
 	if len(schemas) != 2 {
 		t.Fatalf("expected 2 schemas (wildcard), got %d", len(schemas))
@@ -553,7 +555,7 @@ func TestBuildSchemas_WildcardWithOverride(t *testing.T) {
 		},
 	}
 
-	schemas := buildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(cc, parsedABI, registry)
 
 	if len(schemas) != 2 {
 		t.Fatalf("expected 2 schemas, got %d", len(schemas))
@@ -590,7 +592,7 @@ func TestBuildSchemas_MetadataColumns(t *testing.T) {
 		},
 	}
 
-	schemas := buildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(cc, parsedABI, registry)
 	schema := schemas["Transfer"]
 
 	// Check standard metadata columns are present.
@@ -599,7 +601,7 @@ func TestBuildSchemas_MetadataColumns(t *testing.T) {
 		colNames[col.Name] = true
 	}
 
-	expected := []string{"block_number", "transaction_hash", "log_index", "contract_address", "event_name", "status", "sender", "amount"}
+	expected := []string{"block_number", "transaction_hash", "log_index", "timestamp", "contract_address", "event_name", "status", "sender", "amount"}
 	for _, name := range expected {
 		if !colNames[name] {
 			t.Fatalf("missing expected column: %s", name)
@@ -882,9 +884,9 @@ func TestCairoTypeToColumnType(t *testing.T) {
 
 	for _, tt := range tests {
 		td := &abi.TypeDef{Kind: tt.kind}
-		result := cairoTypeToColumnType(td)
+		result := schema.CairoTypeToColumnType(td)
 		if result != tt.expected {
-			t.Errorf("cairoTypeToColumnType(%d) = %s, want %s", tt.kind, result, tt.expected)
+			t.Errorf("CairoTypeToColumnType(%d) = %s, want %s", tt.kind, result, tt.expected)
 		}
 	}
 }

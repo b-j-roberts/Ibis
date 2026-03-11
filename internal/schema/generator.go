@@ -1,0 +1,153 @@
+package schema
+
+import (
+	"strings"
+
+	"github.com/b-j-roberts/ibis/internal/abi"
+	"github.com/b-j-roberts/ibis/internal/config"
+	"github.com/b-j-roberts/ibis/internal/types"
+)
+
+// MetadataColumns returns the standard metadata columns added to every table.
+func MetadataColumns() []types.Column {
+	return []types.Column{
+		{Name: "block_number", Type: "uint64"},
+		{Name: "transaction_hash", Type: "string"},
+		{Name: "log_index", Type: "uint64"},
+		{Name: "timestamp", Type: "uint64"},
+		{Name: "contract_address", Type: "string"},
+		{Name: "event_name", Type: "string"},
+		{Name: "status", Type: "string"},
+	}
+}
+
+// BuildSchemas creates TableSchema definitions for a contract's configured events.
+// Handles wildcard ("*") expansion: all ABI events get the wildcard's table type,
+// with specific event entries overriding the default.
+func BuildSchemas(cc config.ContractConfig, contractABI *abi.ABI, registry *abi.EventRegistry) map[string]*types.TableSchema {
+	schemas := make(map[string]*types.TableSchema)
+
+	// Build a lookup of explicitly configured events.
+	explicit := make(map[string]config.EventConfig)
+	var wildcard *config.EventConfig
+	for _, ec := range cc.Events {
+		if ec.Name == "*" {
+			ecCopy := ec
+			wildcard = &ecCopy
+		} else {
+			explicit[ec.Name] = ec
+		}
+	}
+
+	// Determine which events to index.
+	var eventsToIndex []*abi.EventDef
+
+	if wildcard != nil {
+		// Wildcard: all ABI events.
+		eventsToIndex = registry.Events()
+	} else {
+		// Only explicitly listed events.
+		for name := range explicit {
+			if ev := registry.MatchName(name); ev != nil {
+				eventsToIndex = append(eventsToIndex, ev)
+			}
+		}
+	}
+
+	for _, ev := range eventsToIndex {
+		// Use explicit config if available, otherwise wildcard default.
+		var ec config.EventConfig
+		if explicitEC, ok := explicit[ev.Name]; ok {
+			ec = explicitEC
+		} else if wildcard != nil {
+			ec = *wildcard
+			ec.Name = ev.Name
+		} else {
+			continue
+		}
+
+		schema := BuildTableSchema(cc.Name, ev, ec)
+		schemas[ev.Name] = schema
+	}
+
+	return schemas
+}
+
+// BuildTableSchema creates a single TableSchema from an event definition and config.
+func BuildTableSchema(contractName string, ev *abi.EventDef, ec config.EventConfig) *types.TableSchema {
+	tableName := strings.ToLower(contractName + "_" + ev.Name)
+
+	// Start with standard metadata columns.
+	columns := MetadataColumns()
+
+	// Event-specific columns from ABI.
+	for _, member := range ev.KeyMembers {
+		columns = append(columns, types.Column{
+			Name: member.Name,
+			Type: CairoTypeToColumnType(member.Type),
+		})
+	}
+	for _, member := range ev.DataMembers {
+		columns = append(columns, types.Column{
+			Name: member.Name,
+			Type: CairoTypeToColumnType(member.Type),
+		})
+	}
+
+	// Determine table type.
+	tableType := types.TableTypeLog
+	switch ec.Table.Type {
+	case "unique":
+		tableType = types.TableTypeUnique
+	case "aggregation":
+		tableType = types.TableTypeAggregation
+	}
+
+	// Build aggregate specs.
+	var aggregates []types.AggregateSpec
+	for _, agg := range ec.Table.Aggregates {
+		aggregates = append(aggregates, types.AggregateSpec{
+			Column:    agg.Column,
+			Operation: agg.Operation,
+			Field:     agg.Field,
+		})
+	}
+
+	return &types.TableSchema{
+		Name:       tableName,
+		Contract:   contractName,
+		Event:      ev.Name,
+		TableType:  tableType,
+		Columns:    columns,
+		UniqueKey:  ec.Table.UniqueKey,
+		Aggregates: aggregates,
+	}
+}
+
+// CairoTypeToColumnType maps a Cairo type definition to a store column type string.
+func CairoTypeToColumnType(td *abi.TypeDef) string {
+	switch td.Kind {
+	case abi.CairoFelt252, abi.CairoContractAddress, abi.CairoClassHash:
+		return "string"
+	case abi.CairoU8, abi.CairoU16, abi.CairoU32, abi.CairoU64:
+		return "int64"
+	case abi.CairoU128, abi.CairoU256:
+		return "string" // Too large for int64.
+	case abi.CairoI8, abi.CairoI16, abi.CairoI32, abi.CairoI64:
+		return "int64"
+	case abi.CairoI128:
+		return "string"
+	case abi.CairoBool:
+		return "bool"
+	case abi.CairoByteArray:
+		return "string"
+	case abi.CairoArray, abi.CairoSpan:
+		return "string" // JSON-encoded.
+	case abi.CairoStruct:
+		return "string" // JSON-encoded.
+	case abi.CairoEnum:
+		return "string" // JSON-encoded.
+	default:
+		return "string"
+	}
+}
