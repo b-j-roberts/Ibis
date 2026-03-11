@@ -69,6 +69,19 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("engine setup: %w", err)
 		}
 
+		// Create event bus for SSE streaming.
+		bus := api.NewEventBus()
+		eng.SetOnEvent(func(contract, event, table string, blockNumber, logIndex uint64, data map[string]any) {
+			bus.Publish(api.StreamEvent{
+				Table:       table,
+				Contract:    contract,
+				Event:       event,
+				BlockNumber: blockNumber,
+				LogIndex:    logIndex,
+				Data:        data,
+			})
+		})
+
 		// Start API server in background.
 		apiServer := api.New(api.ServerConfig{
 			Store:     st,
@@ -76,6 +89,7 @@ var runCmd = &cobra.Command{
 			APIConfig: &cfg.API,
 			Contracts: cfg.Contracts,
 			Logger:    logger,
+			EventBus:  bus,
 		})
 		go func() {
 			if err := apiServer.Start(ctx); err != nil {

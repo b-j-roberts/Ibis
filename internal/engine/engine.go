@@ -56,6 +56,10 @@ type Engine struct {
 	// Confirmation depth: blocks past this depth are considered confirmed.
 	confirmDepth uint64
 
+	// onEvent is an optional callback invoked after an event is successfully
+	// indexed. Used by the API server's EventBus for SSE streaming.
+	onEvent func(contract, event, table string, blockNumber, logIndex uint64, data map[string]any)
+
 	// setupDone tracks whether Setup has been called.
 	setupDone bool
 }
@@ -81,6 +85,13 @@ func New(cfg *config.Config, st store.Store, prov *provider.StarknetProvider, lo
 // SetConfirmationDepth overrides the default confirmation depth.
 func (e *Engine) SetConfirmationDepth(depth uint64) {
 	e.confirmDepth = depth
+}
+
+// SetOnEvent sets a callback that is invoked after each event is successfully
+// indexed. The callback receives the contract name, event name, table name,
+// block number, log index, and decoded event data.
+func (e *Engine) SetOnEvent(fn func(contract, event, table string, blockNumber, logIndex uint64, data map[string]any)) {
+	e.onEvent = fn
 }
 
 // Setup resolves ABIs, builds event registries and table schemas, and creates

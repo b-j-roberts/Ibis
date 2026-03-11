@@ -23,6 +23,7 @@ type Server struct {
 	contracts []config.ContractConfig
 	logger    *slog.Logger
 	server    *http.Server
+	bus       *EventBus // SSE event bus for real-time streaming
 }
 
 // ServerConfig holds the dependencies needed to create an API server.
@@ -32,6 +33,7 @@ type ServerConfig struct {
 	APIConfig *config.APIConfig
 	Contracts []config.ContractConfig
 	Logger    *slog.Logger
+	EventBus  *EventBus // Optional: enables SSE streaming when set
 }
 
 // New creates an API Server from the given configuration.
@@ -53,6 +55,7 @@ func New(cfg ServerConfig) *Server {
 		cfg:       cfg.APIConfig,
 		contracts: cfg.Contracts,
 		logger:    logger.With("component", "api"),
+		bus:       cfg.EventBus,
 	}
 }
 
@@ -77,6 +80,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		// Close SSE connections before shutting down the HTTP server.
+		if s.bus != nil {
+			s.bus.Close()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.server.Shutdown(shutdownCtx)
@@ -94,6 +101,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 
 	// Event table endpoints (more specific paths registered first).
+	mux.HandleFunc("GET /v1/{contract}/{event}/stream", s.handleStream)
 	mux.HandleFunc("GET /v1/{contract}/{event}/latest", s.handleGetLatest)
 	mux.HandleFunc("GET /v1/{contract}/{event}/count", s.handleGetCount)
 	mux.HandleFunc("GET /v1/{contract}/{event}/unique", s.handleGetUnique)
@@ -168,6 +176,13 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Flush implements http.Flusher by delegating to the underlying ResponseWriter.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // ---- JSON helpers ----

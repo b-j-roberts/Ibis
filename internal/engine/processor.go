@@ -85,6 +85,11 @@ func (e *Engine) processEvent(ctx context.Context, raw provider.RawEvent) error 
 	// Promote confirmed blocks.
 	e.confirmBlocks(raw.BlockNumber)
 
+	// Notify SSE subscribers.
+	if e.onEvent != nil {
+		e.onEvent(cs.config.Name, eventDef.Name, schema.Name, raw.BlockNumber, logIndex, decoded)
+	}
+
 	e.logger.Debug("indexed event",
 		"event", eventDef.Name,
 		"contract", cs.config.Name,
