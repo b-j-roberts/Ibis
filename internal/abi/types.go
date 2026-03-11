@@ -78,23 +78,23 @@ type FieldDef struct {
 
 // EventDef represents a parsed and resolved event definition.
 type EventDef struct {
-	Name        string      // Short name (e.g., "Transfer")
-	FullName    string      // Full qualified name (e.g., "openzeppelin::...::Transfer")
-	Selector    *felt.Felt  // sn_keccak(Name)
-	KeyMembers  []FieldDef  // Members encoded in keys[] (after keys[0] selector)
-	DataMembers []FieldDef  // Members encoded in data[]
+	Name        string     // Short name (e.g., "Transfer")
+	FullName    string     // Full qualified name (e.g., "openzeppelin::...::Transfer")
+	Selector    *felt.Felt // sn_keccak(Name)
+	KeyMembers  []FieldDef // Members encoded in keys[] (after keys[0] selector)
+	DataMembers []FieldDef // Members encoded in data[]
 }
 
 // --- Raw JSON types for parsing Cairo ABI ---
 
 // RawABIEntry represents a single entry in a Cairo ABI JSON array.
 type RawABIEntry struct {
-	Type            string        `json:"type"`             // "struct", "enum", "event", "function", "interface", "impl"
-	Name            string        `json:"name"`             // Full qualified name
+	Type            string        `json:"type"` // "struct", "enum", "event", "function", "interface", "impl"
+	Name            string        `json:"name"` // Full qualified name
 	Members         []RawMember   `json:"members,omitempty"`
 	Variants        []RawVariant  `json:"variants,omitempty"`
-	Kind            string        `json:"kind,omitempty"`   // For events: "struct" or "enum"
-	Items           []RawABIEntry `json:"items,omitempty"`  // For interface
+	Kind            string        `json:"kind,omitempty"`  // For events: "struct" or "enum"
+	Items           []RawABIEntry `json:"items,omitempty"` // For interface
 	Inputs          []RawParam    `json:"inputs,omitempty"`
 	Outputs         []RawParam    `json:"outputs,omitempty"`
 	StateMutability string        `json:"state_mutability,omitempty"`

@@ -10,9 +10,9 @@ import (
 
 // StreamEvent is an indexed event published to SSE subscribers.
 type StreamEvent struct {
-	Table       string         // Table name (e.g., "mytoken_transfer")
-	Contract    string         // Contract name
-	Event       string         // Event name
+	Table       string // Table name (e.g., "mytoken_transfer")
+	Contract    string // Contract name
+	Event       string // Event name
 	BlockNumber uint64
 	LogIndex    uint64
 	Data        map[string]any
@@ -73,19 +73,19 @@ func (b *EventBus) Publish(event StreamEvent) {
 
 // Subscribe registers a new subscriber filtered by table name and optional
 // field filters. Returns a subscription ID and a channel of events.
-func (b *EventBus) Subscribe(table string, filters []store.Filter) (uint64, <-chan StreamEvent) {
-	id := b.nextID.Add(1)
-	ch := make(chan StreamEvent, 64)
+func (b *EventBus) Subscribe(table string, filters []store.Filter) (id uint64, ch <-chan StreamEvent) {
+	id = b.nextID.Add(1)
+	c := make(chan StreamEvent, 64)
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	b.subscribers[id] = &subscriber{
-		ch:      ch,
+		ch:      c,
 		table:   table,
 		filters: filters,
 	}
-	return id, ch
+	return id, c
 }
 
 // Unsubscribe removes a subscriber and closes its channel.

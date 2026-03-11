@@ -37,7 +37,7 @@ type ServerConfig struct {
 }
 
 // New creates an API Server from the given configuration.
-func New(cfg ServerConfig) *Server {
+func New(cfg *ServerConfig) *Server {
 	schemaMap := make(map[string]*types.TableSchema)
 	for _, s := range cfg.Schemas {
 		key := strings.ToLower(s.Contract) + "/" + strings.ToLower(s.Event)
@@ -66,7 +66,7 @@ func (s *Server) Handler() http.Handler {
 	return s.corsMiddleware(s.loggingMiddleware(mux))
 }
 
-// Start begins serving HTTP requests. It blocks until the context is cancelled.
+// Start begins serving HTTP requests. It blocks until the context is canceled.
 func (s *Server) Start(ctx context.Context) error {
 	handler := s.Handler()
 

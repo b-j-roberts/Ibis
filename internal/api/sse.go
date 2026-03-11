@@ -152,18 +152,18 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, evt StreamEvent)
 }
 
 // parseEventID parses "block:logIndex" into its components.
-func parseEventID(id string) (uint64, uint64, error) {
+func parseEventID(id string) (block, logIndex uint64, err error) {
 	parts := strings.SplitN(id, ":", 2)
 	if len(parts) != 2 {
 		return 0, 0, fmt.Errorf("expected block:logIndex format")
 	}
 
-	block, err := strconv.ParseUint(parts[0], 10, 64)
+	block, err = strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("invalid block number: %w", err)
 	}
 
-	logIndex, err := strconv.ParseUint(parts[1], 10, 64)
+	logIndex, err = strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("invalid log index: %w", err)
 	}

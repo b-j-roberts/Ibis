@@ -120,7 +120,7 @@ func (e *Engine) Schemas() []*types.TableSchema {
 
 // Run starts the indexing engine. It resolves ABIs, creates table schemas,
 // determines the starting block, starts the event subscriber, and processes
-// events until the context is cancelled.
+// events until the context is canceled.
 func (e *Engine) Run(ctx context.Context) error {
 	// Step 1: Resolve ABIs and build per-contract state.
 	if !e.setupDone {
@@ -242,7 +242,6 @@ func (e *Engine) determineStartBlock(ctx context.Context) (uint64, error) {
 		return latest, nil
 	}
 
-	// max(cursor + 1, configStart)
 	startBlock := configStart
 	if cursor > 0 && cursor+1 > startBlock {
 		startBlock = cursor + 1
@@ -290,7 +289,7 @@ func hasWildcardEvent(cc config.ContractConfig) bool {
 	return false
 }
 
-// eventLoop processes events and reorg notifications until the context is cancelled.
+// eventLoop processes events and reorg notifications until the context is canceled.
 func (e *Engine) eventLoop(ctx context.Context) error {
 	for {
 		select {
@@ -307,7 +306,7 @@ func (e *Engine) eventLoop(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if err := e.processEvent(ctx, event); err != nil {
+			if err := e.processEvent(ctx, &event); err != nil {
 				e.logger.Error("event processing failed",
 					"block", event.BlockNumber,
 					"error", err,

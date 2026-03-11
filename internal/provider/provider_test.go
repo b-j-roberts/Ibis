@@ -279,7 +279,7 @@ func TestProviderGetEventsContextCancelled(t *testing.T) {
 
 	_, err = p.GetEvents(ctx, GetEventsOptions{FromBlock: 0, ToBlock: 100})
 	if err == nil {
-		t.Fatal("expected error from cancelled context")
+		t.Fatal("expected error from canceled context")
 	}
 }
 

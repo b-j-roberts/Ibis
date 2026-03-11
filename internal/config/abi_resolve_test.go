@@ -220,7 +220,6 @@ func TestResolveFromChain_DeprecatedClassNilABI(t *testing.T) {
 }
 
 func TestCaching(t *testing.T) {
-	callCount := 0
 	abiStr := contracts.NestedString(testABIJSON)
 	fetcher := &mockFetcher{
 		classOutput: &contracts.ContractClass{
@@ -241,7 +240,6 @@ func TestCaching(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callCount++
 
 	// Reset the fetcher to track if it's called again.
 	fetcher.called = false

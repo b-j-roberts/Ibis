@@ -65,7 +65,7 @@ func setupSSEServer(t *testing.T) (*httptest.Server, *memory.MemoryStore, *api.E
 	bus := api.NewEventBus()
 	t.Cleanup(bus.Close)
 
-	srv := api.New(api.ServerConfig{
+	srv := api.New(&api.ServerConfig{
 		Store:   st,
 		Schemas: []*types.TableSchema{schema},
 		APIConfig: &config.APIConfig{
@@ -91,7 +91,7 @@ func TestSSEStream(t *testing.T) {
 	ts, _, bus := setupSSEServer(t)
 
 	// Connect to SSE stream.
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/MyToken/Transfer/stream", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/MyToken/Transfer/stream", http.NoBody)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -173,7 +173,7 @@ func TestSSEStreamWithFilter(t *testing.T) {
 	ts, _, bus := setupSSEServer(t)
 
 	// Connect with filter: only from=0xalice.
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/MyToken/Transfer/stream?from=eq.0xalice", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/MyToken/Transfer/stream?from=eq.0xalice", http.NoBody)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -224,7 +224,7 @@ func TestSSELastEventIDReplay(t *testing.T) {
 	ts, _, bus := setupSSEServer(t)
 
 	// Connect with Last-Event-ID: 100:0 (should replay block 101 event).
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/MyToken/Transfer/stream", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/MyToken/Transfer/stream", http.NoBody)
 	req.Header.Set("Last-Event-ID", "100:0")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -405,7 +405,7 @@ func TestSSENoEventBus(t *testing.T) {
 	st.CreateTable(context.Background(), schema)
 
 	// Create server WITHOUT EventBus.
-	srv := api.New(api.ServerConfig{
+	srv := api.New(&api.ServerConfig{
 		Store:   st,
 		Schemas: []*types.TableSchema{schema},
 		APIConfig: &config.APIConfig{

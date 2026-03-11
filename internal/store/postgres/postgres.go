@@ -114,10 +114,7 @@ func (s *PostgresStore) applyOp(ctx context.Context, tx pgx.Tx, op store.Operati
 		if err := s.insertRow(ctx, tx, op); err != nil {
 			return err
 		}
-		// For unique tables, upsert the unique entry.
-		if hasSchema && sch.TableType == types.TableTypeUnique && sch.UniqueKey != "" {
-			// The insert already handles this via ON CONFLICT if data contains the unique key.
-		}
+		// For unique tables, the insert already handles upsert via ON CONFLICT.
 		if hasSchema && sch.TableType == types.TableTypeAggregation {
 			aggDeltas[op.Table] = append(aggDeltas[op.Table], aggDelta{
 				specs: sch.Aggregates, data: op.Data, subtract: false,
@@ -590,7 +587,7 @@ func (s *PostgresStore) Close() error {
 
 // ---- Query builders ----
 
-func (s *PostgresStore) buildSelectQuery(table string, q store.Query) (string, []any) {
+func (s *PostgresStore) buildSelectQuery(table string, q store.Query) (query string, args []any) {
 	sch, hasSchema := s.schemas[table]
 
 	var cols string
@@ -604,7 +601,6 @@ func (s *PostgresStore) buildSelectQuery(table string, q store.Query) (string, [
 		cols = "*"
 	}
 
-	var args []any
 	argIdx := 1
 
 	where := s.buildWhereClause(q.Filters, &args, &argIdx)
@@ -625,14 +621,14 @@ func (s *PostgresStore) buildSelectQuery(table string, q store.Query) (string, [
 		limit = 50
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s%s ORDER BY %s LIMIT $%d OFFSET $%d",
+	query = fmt.Sprintf("SELECT %s FROM %s%s ORDER BY %s LIMIT $%d OFFSET $%d",
 		cols, table, where, orderClause, argIdx, argIdx+1)
 	args = append(args, limit, q.Offset)
 
 	return query, args
 }
 
-func (s *PostgresStore) buildUniqueSelectQuery(table, uniqueKey string, q store.Query) (string, []any) {
+func (s *PostgresStore) buildUniqueSelectQuery(table, uniqueKey string, q store.Query) (query string, args []any) {
 	sch, hasSchema := s.schemas[table]
 
 	var cols string
@@ -646,7 +642,6 @@ func (s *PostgresStore) buildUniqueSelectQuery(table, uniqueKey string, q store.
 		cols = "*"
 	}
 
-	var args []any
 	argIdx := 1
 
 	where := s.buildWhereClause(q.Filters, &args, &argIdx)
@@ -666,7 +661,7 @@ func (s *PostgresStore) buildUniqueSelectQuery(table, uniqueKey string, q store.
 	}
 
 	// Use DISTINCT ON to get latest per unique key, then wrap for ordering/pagination.
-	query := fmt.Sprintf(
+	query = fmt.Sprintf(
 		`SELECT %s FROM (
 			SELECT DISTINCT ON (%s) %s
 			FROM %s%s
@@ -731,9 +726,9 @@ func (s *PostgresStore) scanEvents(rows pgx.Rows, table string) ([]types.Indexed
 		}
 
 		for i, val := range vals {
-			colName := string(descs[i].Name)
+			colName := descs[i].Name
 			if hasSchema {
-				val = convertScannedValue(val, columnType(sch, colName))
+				val = convertScannedValue(val, columnType(&sch, colName))
 			}
 			evt.Data[colName] = val
 		}
@@ -747,7 +742,7 @@ func (s *PostgresStore) scanEvents(rows pgx.Rows, table string) ([]types.Indexed
 
 // ---- Helpers ----
 
-func columnType(sch types.TableSchema, colName string) string {
+func columnType(sch *types.TableSchema, colName string) string {
 	for _, col := range sch.Columns {
 		if col.Name == colName {
 			return col.Type
@@ -809,7 +804,7 @@ func convertValue(v any, colType string) any {
 
 func convertScannedValue(v any, colType string) any {
 	if v == nil {
-		return v
+		return nil
 	}
 	switch colType {
 	case "uint64":

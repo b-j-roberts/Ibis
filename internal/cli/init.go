@@ -17,11 +17,11 @@ import (
 )
 
 var (
-	initContracts []string
-	initOutput    string
-	initNetwork   string
-	initRPC       string
-	initDatabase  string
+	initContracts      []string
+	initOutput         string
+	initNetwork        string
+	initRPC            string
+	initDatabase       string
 	initNonInteractive bool
 )
 
@@ -489,7 +489,7 @@ func writeConfig(out io.Writer, cfg *config.Config, path string) error {
 
 	content := []byte(header + string(data))
 
-	if err := os.WriteFile(path, content, 0644); err != nil {
+	if err := os.WriteFile(path, content, 0o644); err != nil {
 		return fmt.Errorf("writing config to %s: %w", path, err)
 	}
 

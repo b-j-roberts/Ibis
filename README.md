@@ -1,8 +1,8 @@
+# Ibis
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![CI](https://github.com/b-j-roberts/ibis/actions/workflows/ci.yml/badge.svg)](https://github.com/b-j-roberts/ibis/actions/workflows/ci.yml)
-
-# Ibis
 
 A fast, easy-to-use Starknet event indexer written in Go. One config file, one command, fully typed APIs.
 

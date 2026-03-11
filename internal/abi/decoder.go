@@ -11,7 +11,7 @@ import (
 // DecodeEvent decodes raw event keys and data felts into a typed map
 // using the matched event definition.
 // keys should NOT include keys[0] (the selector) -- pass keys[1:].
-func DecodeEvent(ev *EventDef, keys []*felt.Felt, data []*felt.Felt) (map[string]any, error) {
+func DecodeEvent(ev *EventDef, keys, data []*felt.Felt) (map[string]any, error) {
 	result := make(map[string]any, len(ev.KeyMembers)+len(ev.DataMembers))
 
 	// Decode key members from keys[].
@@ -41,7 +41,7 @@ func DecodeEvent(ev *EventDef, keys []*felt.Felt, data []*felt.Felt) (map[string
 
 // decodeType decodes a value of the given type from felts starting at offset.
 // Returns the decoded value and the number of felts consumed.
-func decodeType(td *TypeDef, felts []*felt.Felt, offset int) (any, int, error) {
+func decodeType(td *TypeDef, felts []*felt.Felt, offset int) (val any, consumed int, err error) {
 	switch td.Kind {
 	case CairoFelt252, CairoContractAddress, CairoClassHash:
 		return decodeFelt(felts, offset)
@@ -85,7 +85,7 @@ func decodeType(td *TypeDef, felts []*felt.Felt, offset int) (any, int, error) {
 }
 
 // decodeFelt decodes a single felt as a hex string.
-func decodeFelt(felts []*felt.Felt, offset int) (string, int, error) {
+func decodeFelt(felts []*felt.Felt, offset int) (val string, consumed int, err error) {
 	if offset >= len(felts) {
 		return "", 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -93,7 +93,7 @@ func decodeFelt(felts []*felt.Felt, offset int) (string, int, error) {
 }
 
 // decodeUint decodes a felt as an unsigned integer (8-64 bit range -> uint64).
-func decodeUint(felts []*felt.Felt, offset int, bits int) (uint64, int, error) {
+func decodeUint(felts []*felt.Felt, offset, bits int) (val uint64, consumed int, err error) {
 	if offset >= len(felts) {
 		return 0, 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -101,15 +101,15 @@ func decodeUint(felts []*felt.Felt, offset int, bits int) (uint64, int, error) {
 	felts[offset].BigInt(bi)
 
 	// Validate range.
-	max := new(big.Int).Lsh(big.NewInt(1), uint(bits))
-	if bi.Cmp(max) >= 0 {
+	maxVal := new(big.Int).Lsh(big.NewInt(1), uint(bits))
+	if bi.Cmp(maxVal) >= 0 {
 		return 0, 0, fmt.Errorf("value %s exceeds u%d range", bi.String(), bits)
 	}
 	return bi.Uint64(), 1, nil
 }
 
 // decodeU128 decodes a felt as a u128 string (too large for uint64).
-func decodeU128(felts []*felt.Felt, offset int) (string, int, error) {
+func decodeU128(felts []*felt.Felt, offset int) (val string, consumed int, err error) {
 	if offset >= len(felts) {
 		return "", 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -119,7 +119,7 @@ func decodeU128(felts []*felt.Felt, offset int) (string, int, error) {
 }
 
 // decodeU256 decodes two felts (low, high u128) as a u256 string.
-func decodeU256(felts []*felt.Felt, offset int) (string, int, error) {
+func decodeU256(felts []*felt.Felt, offset int) (val string, consumed int, err error) {
 	if offset+1 >= len(felts) {
 		return "", 0, fmt.Errorf("u256 requires 2 felts at offset %d (len=%d)", offset, len(felts))
 	}
@@ -128,14 +128,13 @@ func decodeU256(felts []*felt.Felt, offset int) (string, int, error) {
 	felts[offset].BigInt(low)
 	felts[offset+1].BigInt(high)
 
-	// value = high * 2^128 + low
 	result := new(big.Int).Lsh(high, 128)
 	result.Add(result, low)
 	return result.String(), 2, nil
 }
 
 // decodeSigned decodes a felt as a signed integer (8-64 bit range -> int64).
-func decodeSigned(felts []*felt.Felt, offset int, bits int) (int64, int, error) {
+func decodeSigned(felts []*felt.Felt, offset, bits int) (val int64, consumed int, err error) {
 	if offset >= len(felts) {
 		return 0, 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -152,7 +151,7 @@ func decodeSigned(felts []*felt.Felt, offset int, bits int) (int64, int, error) 
 }
 
 // decodeI128 decodes a felt as a signed i128 string.
-func decodeI128(felts []*felt.Felt, offset int) (string, int, error) {
+func decodeI128(felts []*felt.Felt, offset int) (val string, consumed int, err error) {
 	if offset >= len(felts) {
 		return "", 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -168,7 +167,7 @@ func decodeI128(felts []*felt.Felt, offset int) (string, int, error) {
 }
 
 // decodeBool decodes a felt as a boolean.
-func decodeBool(felts []*felt.Felt, offset int) (bool, int, error) {
+func decodeBool(felts []*felt.Felt, offset int) (val bool, consumed int, err error) {
 	if offset >= len(felts) {
 		return false, 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -177,7 +176,7 @@ func decodeBool(felts []*felt.Felt, offset int) (bool, int, error) {
 
 // decodeByteArray decodes a Cairo ByteArray from felts.
 // ByteArray layout: [num_chunks, chunk0, chunk1, ..., pending_word, pending_word_len]
-func decodeByteArray(felts []*felt.Felt, offset int) (string, int, error) {
+func decodeByteArray(felts []*felt.Felt, offset int) (val string, consumed int, err error) {
 	if offset >= len(felts) {
 		return "", 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -186,7 +185,7 @@ func decodeByteArray(felts []*felt.Felt, offset int) (string, int, error) {
 	numChunks := new(big.Int)
 	felts[offset].BigInt(numChunks)
 	n := int(numChunks.Int64())
-	consumed := 1
+	consumed = 1
 
 	if offset+1+n+2 > len(felts) {
 		return "", 0, fmt.Errorf("ByteArray: need %d felts at offset %d (len=%d)", 1+n+2, offset, len(felts))
@@ -219,7 +218,7 @@ func decodeByteArray(felts []*felt.Felt, offset int) (string, int, error) {
 }
 
 // decodeArray decodes a length-prefixed Array<T> or Span<T>.
-func decodeArray(td *TypeDef, felts []*felt.Felt, offset int) ([]any, int, error) {
+func decodeArray(td *TypeDef, felts []*felt.Felt, offset int) (result []any, consumed int, err error) {
 	if offset >= len(felts) {
 		return nil, 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -228,13 +227,13 @@ func decodeArray(td *TypeDef, felts []*felt.Felt, offset int) ([]any, int, error
 	lenBI := new(big.Int)
 	felts[offset].BigInt(lenBI)
 	arrLen := int(lenBI.Int64())
-	consumed := 1
+	consumed = 1
 
 	if td.Inner == nil {
 		return nil, 0, fmt.Errorf("Array/Span has no inner type definition")
 	}
 
-	result := make([]any, 0, arrLen)
+	result = make([]any, 0, arrLen)
 	for i := 0; i < arrLen; i++ {
 		val, n, err := decodeType(td.Inner, felts, offset+consumed)
 		if err != nil {
@@ -248,9 +247,9 @@ func decodeArray(td *TypeDef, felts []*felt.Felt, offset int) ([]any, int, error
 }
 
 // decodeStruct decodes a struct by decoding each member in order.
-func decodeStruct(td *TypeDef, felts []*felt.Felt, offset int) (map[string]any, int, error) {
-	result := make(map[string]any, len(td.Members))
-	consumed := 0
+func decodeStruct(td *TypeDef, felts []*felt.Felt, offset int) (result map[string]any, consumed int, err error) {
+	result = make(map[string]any, len(td.Members))
+	consumed = 0
 
 	for _, member := range td.Members {
 		val, n, err := decodeType(member.Type, felts, offset+consumed)
@@ -266,7 +265,7 @@ func decodeStruct(td *TypeDef, felts []*felt.Felt, offset int) (map[string]any, 
 
 // decodeEnum decodes an enum value: first felt is the variant index,
 // followed by the variant's data.
-func decodeEnum(td *TypeDef, felts []*felt.Felt, offset int) (map[string]any, int, error) {
+func decodeEnum(td *TypeDef, felts []*felt.Felt, offset int) (result map[string]any, consumed int, err error) {
 	if offset >= len(felts) {
 		return nil, 0, fmt.Errorf("offset %d out of bounds (len=%d)", offset, len(felts))
 	}
@@ -275,14 +274,14 @@ func decodeEnum(td *TypeDef, felts []*felt.Felt, offset int) (map[string]any, in
 	idxBI := new(big.Int)
 	felts[offset].BigInt(idxBI)
 	idx := int(idxBI.Int64())
-	consumed := 1
+	consumed = 1
 
 	if idx >= len(td.Variants) {
 		return nil, 0, fmt.Errorf("enum variant index %d out of range (have %d variants)", idx, len(td.Variants))
 	}
 
 	variant := td.Variants[idx]
-	result := map[string]any{
+	result = map[string]any{
 		"variant": variant.Name,
 	}
 

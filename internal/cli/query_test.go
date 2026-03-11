@@ -44,7 +44,7 @@ contracts:
               field: amount
 `
 	path := filepath.Join(dir, "ibis.config.yaml")
-	if err := os.WriteFile(path, []byte(cfg), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -355,9 +355,7 @@ func TestListTables(t *testing.T) {
 	cmd := queryCmd
 	cmd.SetOut(&buf)
 
-	if err := listTables(cmd, cfg); err != nil {
-		t.Fatal(err)
-	}
+	listTables(cmd, cfg)
 
 	output := buf.String()
 	if !strings.Contains(output, "TestContract") {

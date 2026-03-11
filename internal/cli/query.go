@@ -69,7 +69,8 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	if queryList {
-		return listTables(cmd, cfg)
+		listTables(cmd, cfg)
+		return nil
 	}
 
 	if len(args) < 2 {
@@ -127,7 +128,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	return outputEvents(cmd, events)
 }
 
-func listTables(cmd *cobra.Command, cfg *config.Config) error {
+func listTables(cmd *cobra.Command, cfg *config.Config) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Available tables:")
 	fmt.Fprintln(out)
@@ -143,7 +144,6 @@ func listTables(cmd *cobra.Command, cfg *config.Config) error {
 		}
 		fmt.Fprintln(out)
 	}
-	return nil
 }
 
 func buildQuery() (store.Query, error) {

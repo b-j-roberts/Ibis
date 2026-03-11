@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -78,7 +77,7 @@ func setupIntegrationServer(t *testing.T) (*httptest.Server, *memory.MemoryStore
 	bus := api.NewEventBus()
 	t.Cleanup(bus.Close)
 
-	srv := api.New(api.ServerConfig{
+	srv := api.New(&api.ServerConfig{
 		Store:   st,
 		Schemas: []*types.TableSchema{schema},
 		APIConfig: &config.APIConfig{
@@ -131,7 +130,7 @@ func readSSEEvent(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) (
 func TestIntegration_SSEBasicConnection(t *testing.T) {
 	ts, _, _ := setupIntegrationServer(t)
 
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", http.NoBody)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -167,7 +166,7 @@ func TestIntegration_SSEBasicConnection(t *testing.T) {
 func TestIntegration_SSEReceiveRealTimeEvents(t *testing.T) {
 	ts, _, bus := setupIntegrationServer(t)
 
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", http.NoBody)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -220,7 +219,7 @@ func TestIntegration_SSEFilterSupport(t *testing.T) {
 	ts, _, bus := setupIntegrationServer(t)
 
 	// Subscribe with filter: from=eq.0xdeadbeef
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream?from=eq.0xdeadbeef", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream?from=eq.0xdeadbeef", http.NoBody)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -268,7 +267,7 @@ func TestIntegration_SSELastEventIDReplay(t *testing.T) {
 
 	// Connect with Last-Event-ID: 1000:0
 	// Should replay events after block 1000, log_index 0 (i.e., 1001:0 and 1002:0).
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", http.NoBody)
 	req.Header.Set("Last-Event-ID", "1000:0")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -347,7 +346,7 @@ func TestIntegration_SSEClientDisconnectCleanup(t *testing.T) {
 	ts, _, bus := setupIntegrationServer(t)
 
 	// Connect a client.
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", http.NoBody)
 	ctx, cancel := context.WithCancel(context.Background())
 	req = req.WithContext(ctx)
 
@@ -400,7 +399,7 @@ func TestIntegration_SSEGracefulShutdown(t *testing.T) {
 
 	bus := api.NewEventBus()
 
-	srv := api.New(api.ServerConfig{
+	srv := api.New(&api.ServerConfig{
 		Store:   st,
 		Schemas: []*types.TableSchema{schema},
 		APIConfig: &config.APIConfig{
@@ -422,7 +421,7 @@ func TestIntegration_SSEGracefulShutdown(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for i := 0; i < 3; i++ {
-		req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", nil)
+		req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", http.NoBody)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("client %d connect: %v", i, err)
@@ -441,10 +440,7 @@ func TestIntegration_SSEGracefulShutdown(t *testing.T) {
 			defer r.Body.Close()
 			// Read should eventually return EOF/empty because the channel was closed.
 			buf := make([]byte, 1024)
-			_, err := r.Body.Read(buf)
-			if err != nil && err != io.EOF {
-				// Connection was closed — this is expected.
-			}
+			_, _ = r.Body.Read(buf)
 		}(i, resp)
 	}
 
@@ -476,7 +472,7 @@ func TestIntegration_SSEMultipleClients(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		results[i] = make(chan clientResult, 1)
 		go func(idx int) {
-			req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", nil)
+			req, _ := http.NewRequest("GET", ts.URL+"/v1/STRK/Transfer/stream", http.NoBody)
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			req = req.WithContext(ctx)

@@ -454,6 +454,58 @@
 - Consider splitting indexer and API into separate deployments sharing the same database
 - Reference zindex's `deploy/` and Helm patterns
 
+### 3.7 Forward Table Type
+
+**Description**: A new `validTableType` called `forward` that forwards decoded event data to a specified URL via HTTP/HTTPS POST. Unlike `log`, `unique`, and `aggregation`, the `forward` type does not store events locally -- ibis acts as a pure event relay, parsing Starknet events via ABI and POSTing structured JSON payloads to an external endpoint. This enables users to build custom backends (their own database, message queue, analytics pipeline, etc.) and use ibis purely as an event decoder and forwarder.
+
+**Requirements**:
+- [ ] Add `"forward"` to `validTableTypes` in `internal/config/validate.go`
+- [ ] Add `TableTypeForward` variant to the `TableType` enum in `internal/types/types.go`
+- [ ] Add `ForwardConfig` fields to `TableConfig`: `URL` (required, string), `Headers` (optional, `map[string]string`), `Timeout` (optional, duration, default 10s), `MaxRetries` (optional, int, default 5)
+- [ ] Config validation: `forward` tables REQUIRE a `url` field; reject if missing. Validate URL scheme is `http` or `https`. Apply `expandEnvVars` to URL and header values (e.g., `${WEBHOOK_TOKEN}`)
+- [ ] Create `internal/forward/forwarder.go` with a `Forwarder` struct that manages HTTP delivery: singleton `http.Client` with custom `Transport` (connection pooling, 10s timeouts), bounded delivery channel, and a worker goroutine
+- [ ] JSON payload format for each forwarded event:
+  ```json
+  {
+    "event_id": "123456:0",
+    "contract": "MyContract",
+    "event": "Transfer",
+    "block_number": 123456,
+    "block_hash": "0xabc...",
+    "transaction_hash": "0xdef...",
+    "log_index": 0,
+    "timestamp": 1710072000,
+    "status": "ACCEPTED_L2",
+    "data": { "from": "0x123...", "to": "0x456...", "amount": "1000" }
+  }
+  ```
+- [ ] Include configurable HTTP headers on every request (supports `Authorization`, API keys, etc.). Always set `Content-Type: application/json`, `User-Agent: ibis-indexer/1.0`, and `X-Ibis-Event-Id: {event_id}` for idempotency
+- [ ] Bounded retry with exponential backoff on failure: 5 attempts with delays of 1s, 2s, 4s, 8s, 16s (with jitter). Retry on 429, 5xx, connection errors. Do NOT retry on 4xx (except 429). Respect `Retry-After` header when present
+- [ ] Non-blocking delivery: engine sends events to the forwarder via a buffered channel (capacity 10,000). If the channel is full, log a warning and drop the event. Never block the indexing pipeline
+- [ ] Engine processor (`internal/engine/processor.go`): when a table's type is `forward`, skip store operations and instead route the decoded event to the `Forwarder`
+- [ ] Graceful shutdown: drain the delivery channel and wait for in-flight requests (with a 30s deadline) before exiting
+- [ ] Unit tests for the forwarder (delivery, retry, backoff, channel overflow) using `httptest.Server`
+
+**Implementation Notes**:
+- The forwarder hooks into the same event processing pipeline as the store -- in `processor.go`, check `schema.TableType == TableTypeForward` before calling `store.ApplyOperations`. Forward events bypass the store entirely.
+- Use a single `http.Client` per `Forwarder` instance with `MaxIdleConnsPerHost: 10` and `IdleConnTimeout: 90s`. For forward tables pointing to different URLs, each gets its own `Forwarder` with its own client.
+- The config shape nests under the existing `table` block:
+  ```yaml
+  events:
+    - name: Transfer
+      table:
+        type: forward
+        url: "https://my-api.com/events"
+        timeout: 10s
+        max_retries: 5
+        headers:
+          Authorization: "Bearer ${WEBHOOK_TOKEN}"
+  ```
+- Wildcard `"*"` with `type: forward` should work: all events forwarded to the same URL. Specific event entries can override with a different URL or table type.
+- The existing `EventBus` (used for SSE) is a separate concern -- forward tables use their own delivery path. An event can be both forwarded (via a `forward` table entry) and stored (via a separate `log`/`unique`/`aggregation` entry for the same event) if the user configures both.
+- Jitter implementation: `delay = baseDelay * 2^attempt * (0.5 + rand.Float64()*0.5)` (equal jitter).
+- Consider adding a `/v1/status` field showing forward table health (events forwarded, failed, queued) for observability.
+
 ---
 
 ## Phase 4: Future

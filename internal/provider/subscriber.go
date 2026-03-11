@@ -118,7 +118,7 @@ func (s *EventSubscriber) SetReorgChan(ch chan<- ReorgNotification) {
 	s.reorgs = ch
 }
 
-// Start begins event subscription for all contracts. Blocks until ctx is cancelled.
+// Start begins event subscription for all contracts. Blocks until ctx is canceled.
 // Each contract gets its own goroutine with independent WSS/polling lifecycle.
 func (s *EventSubscriber) Start(ctx context.Context) error {
 	if len(s.contracts) == 0 {
@@ -239,7 +239,7 @@ func (s *EventSubscriber) subscribeWSS(ctx context.Context, contract ContractSub
 }
 
 // processWSSEvents reads events from an active WSS session until an error
-// occurs or the context is cancelled.
+// occurs or the context is canceled.
 func (s *EventSubscriber) processWSSEvents(ctx context.Context, session *wssSession, lastBlock *uint64, logger *slog.Logger) error {
 	for {
 		select {

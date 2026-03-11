@@ -83,7 +83,7 @@ var runCmd = &cobra.Command{
 		})
 
 		// Start API server in background.
-		apiServer := api.New(api.ServerConfig{
+		apiServer := api.New(&api.ServerConfig{
 			Store:     st,
 			Schemas:   eng.Schemas(),
 			APIConfig: &cfg.API,

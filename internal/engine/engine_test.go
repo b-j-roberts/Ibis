@@ -76,7 +76,7 @@ func testContractState(address *felt.Felt, contractName string, events []*abi.Ev
 }
 
 // makeRawEvent creates a RawEvent for testing.
-func makeRawEvent(selector *felt.Felt, contractAddr *felt.Felt, blockNumber uint64, senderFelt *felt.Felt, amountFelt *felt.Felt) provider.RawEvent {
+func makeRawEvent(selector, contractAddr *felt.Felt, blockNumber uint64, senderFelt, amountFelt *felt.Felt) provider.RawEvent {
 	txHash := new(felt.Felt).SetUint64(blockNumber*1000 + 1)
 	blockHash := new(felt.Felt).SetUint64(blockNumber * 100)
 	return provider.RawEvent{
@@ -185,11 +185,11 @@ func TestProcessEvent_MatchAndDecode(t *testing.T) {
 	}
 
 	e := &Engine{
-		store:      st,
-		logger:     noopLogger(),
-		pending:    NewPendingTracker(),
-		logIndices: make(map[uint64]uint64),
-		contracts:  []*contractState{cs},
+		store:        st,
+		logger:       noopLogger(),
+		pending:      NewPendingTracker(),
+		logIndices:   make(map[uint64]uint64),
+		contracts:    []*contractState{cs},
 		confirmDepth: DefaultConfirmationDepth,
 	}
 
@@ -197,7 +197,7 @@ func TestProcessEvent_MatchAndDecode(t *testing.T) {
 	amount := new(felt.Felt).SetUint64(1000)
 	raw := makeRawEvent(eventDef.Selector, contractAddr, 100, sender, amount)
 
-	if err := e.processEvent(ctx, raw); err != nil {
+	if err := e.processEvent(ctx, &raw); err != nil {
 		t.Fatalf("processEvent failed: %v", err)
 	}
 
@@ -236,16 +236,16 @@ func TestProcessEvent_SkipsUnknownContract(t *testing.T) {
 	cs := testContractState(contractAddr, "mytoken", []*abi.EventDef{eventDef}, types.TableTypeLog)
 
 	e := &Engine{
-		store:      st,
-		logger:     noopLogger(),
-		pending:    NewPendingTracker(),
-		logIndices: make(map[uint64]uint64),
-		contracts:  []*contractState{cs},
+		store:        st,
+		logger:       noopLogger(),
+		pending:      NewPendingTracker(),
+		logIndices:   make(map[uint64]uint64),
+		contracts:    []*contractState{cs},
 		confirmDepth: DefaultConfirmationDepth,
 	}
 
 	raw := makeRawEvent(eventDef.Selector, unknownAddr, 100, new(felt.Felt), new(felt.Felt))
-	if err := e.processEvent(context.Background(), raw); err != nil {
+	if err := e.processEvent(context.Background(), &raw); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -263,17 +263,17 @@ func TestProcessEvent_SkipsUnknownSelector(t *testing.T) {
 	cs := testContractState(contractAddr, "mytoken", []*abi.EventDef{eventDef}, types.TableTypeLog)
 
 	e := &Engine{
-		store:      st,
-		logger:     noopLogger(),
-		pending:    NewPendingTracker(),
-		logIndices: make(map[uint64]uint64),
-		contracts:  []*contractState{cs},
+		store:        st,
+		logger:       noopLogger(),
+		pending:      NewPendingTracker(),
+		logIndices:   make(map[uint64]uint64),
+		contracts:    []*contractState{cs},
 		confirmDepth: DefaultConfirmationDepth,
 	}
 
 	unknownSelector := new(felt.Felt).SetUint64(0x999)
 	raw := makeRawEvent(unknownSelector, contractAddr, 100, new(felt.Felt), new(felt.Felt))
-	if err := e.processEvent(context.Background(), raw); err != nil {
+	if err := e.processEvent(context.Background(), &raw); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -290,11 +290,11 @@ func TestProcessEvent_MultipleEventsInBlock(t *testing.T) {
 	}
 
 	e := &Engine{
-		store:      st,
-		logger:     noopLogger(),
-		pending:    NewPendingTracker(),
-		logIndices: make(map[uint64]uint64),
-		contracts:  []*contractState{cs},
+		store:        st,
+		logger:       noopLogger(),
+		pending:      NewPendingTracker(),
+		logIndices:   make(map[uint64]uint64),
+		contracts:    []*contractState{cs},
 		confirmDepth: DefaultConfirmationDepth,
 	}
 
@@ -303,7 +303,7 @@ func TestProcessEvent_MultipleEventsInBlock(t *testing.T) {
 		sender := new(felt.Felt).SetUint64(i + 1)
 		amount := new(felt.Felt).SetUint64((i + 1) * 100)
 		raw := makeRawEvent(eventDef.Selector, contractAddr, 50, sender, amount)
-		if err := e.processEvent(ctx, raw); err != nil {
+		if err := e.processEvent(ctx, &raw); err != nil {
 			t.Fatalf("processEvent %d failed: %v", i, err)
 		}
 	}
@@ -350,7 +350,7 @@ func TestHandleReorg_RevertsBlockOps(t *testing.T) {
 		sender := new(felt.Felt).SetUint64(block)
 		amount := new(felt.Felt).SetUint64(block * 100)
 		raw := makeRawEvent(eventDef.Selector, contractAddr, block, sender, amount)
-		if err := e.processEvent(ctx, raw); err != nil {
+		if err := e.processEvent(ctx, &raw); err != nil {
 			t.Fatalf("processEvent block %d: %v", block, err)
 		}
 	}
@@ -416,7 +416,7 @@ func TestHandleReorg_FullReorg(t *testing.T) {
 		sender := new(felt.Felt).SetUint64(block)
 		amount := new(felt.Felt).SetUint64(block * 100)
 		raw := makeRawEvent(eventDef.Selector, contractAddr, block, sender, amount)
-		if err := e.processEvent(ctx, raw); err != nil {
+		if err := e.processEvent(ctx, &raw); err != nil {
 			t.Fatal(err)
 		}
 	}

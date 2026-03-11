@@ -63,7 +63,8 @@ func buildABI(entries []RawABIEntry) (*ABI, error) {
 	}
 
 	// Pass 1: Register all struct and enum type skeletons.
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		switch entry.Type {
 		case "struct":
 			abi.Types[entry.Name] = &TypeDef{
@@ -79,7 +80,8 @@ func buildABI(entries []RawABIEntry) (*ABI, error) {
 	}
 
 	// Pass 2: Resolve members and variants.
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		switch entry.Type {
 		case "struct":
 			td := abi.Types[entry.Name]
@@ -103,14 +105,12 @@ func buildABI(entries []RawABIEntry) (*ABI, error) {
 	}
 
 	// Pass 3: Extract event definitions.
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		if entry.Type != "event" || entry.Kind != "struct" {
 			continue
 		}
-		ev, err := abi.buildEventDef(entry)
-		if err != nil {
-			return nil, fmt.Errorf("building event %s: %w", entry.Name, err)
-		}
+		ev := abi.buildEventDef(entry)
 		abi.Events = append(abi.Events, ev)
 	}
 
@@ -118,7 +118,7 @@ func buildABI(entries []RawABIEntry) (*ABI, error) {
 }
 
 // buildEventDef creates an EventDef from a struct-kind event entry.
-func (a *ABI) buildEventDef(entry RawABIEntry) (*EventDef, error) {
+func (a *ABI) buildEventDef(entry *RawABIEntry) *EventDef {
 	ev := &EventDef{
 		Name:     shortName(entry.Name),
 		FullName: entry.Name,
@@ -139,7 +139,7 @@ func (a *ABI) buildEventDef(entry RawABIEntry) (*EventDef, error) {
 		}
 	}
 
-	return ev, nil
+	return ev
 }
 
 // resolveType resolves a Cairo type string into a TypeDef.
@@ -166,24 +166,24 @@ func (a *ABI) resolveType(typeName string) *TypeDef {
 // knownPrimitives is the set of Cairo types that should always be decoded
 // as primitives, even when they appear as struct/enum in the ABI.
 var knownPrimitives = map[string]bool{
-	"core::felt252":                                        true,
-	"core::integer::u8":                                    true,
-	"core::integer::u16":                                   true,
-	"core::integer::u32":                                   true,
-	"core::integer::u64":                                   true,
-	"core::integer::u128":                                  true,
-	"core::integer::u256":                                  true,
-	"core::integer::i8":                                    true,
-	"core::integer::i16":                                   true,
-	"core::integer::i32":                                   true,
-	"core::integer::i64":                                   true,
-	"core::integer::i128":                                  true,
-	"core::bool":                                           true,
-	"core::starknet::contract_address::ContractAddress":    true,
-	"core::starknet::class_hash::ClassHash":                true,
-	"core::byte_array::ByteArray":                          true,
-	"()":                                                   true,
-	"core::zeroable::NonZero::<()>":                        true,
+	"core::felt252":       true,
+	"core::integer::u8":   true,
+	"core::integer::u16":  true,
+	"core::integer::u32":  true,
+	"core::integer::u64":  true,
+	"core::integer::u128": true,
+	"core::integer::u256": true,
+	"core::integer::i8":   true,
+	"core::integer::i16":  true,
+	"core::integer::i32":  true,
+	"core::integer::i64":  true,
+	"core::integer::i128": true,
+	"core::bool":          true,
+	"core::starknet::contract_address::ContractAddress": true,
+	"core::starknet::class_hash::ClassHash":             true,
+	"core::byte_array::ByteArray":                       true,
+	"()":                                                true,
+	"core::zeroable::NonZero::<()>":                     true,
 }
 
 // isKnownPrimitive returns true if the type name is a well-known primitive

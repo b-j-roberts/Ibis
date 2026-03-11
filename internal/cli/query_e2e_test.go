@@ -50,7 +50,7 @@ contracts:
               field: amount
 `
 	cfgFile = filepath.Join(dir, "ibis.config.yaml")
-	if err := os.WriteFile(cfgFile, []byte(cfg), 0644); err != nil {
+	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,15 +313,15 @@ func TestE2E_02_List(t *testing.T) {
 	}
 
 	checks := map[string]string{
-		"MyContract":             "contract name",
-		"0x1234567890abcdef":     "contract address",
-		"Transfer":               "Transfer event",
-		"Balance":                "Balance event",
-		"Volume":                 "Volume event",
-		"mycontract_transfer":    "table name for Transfer",
-		"type=log":               "table type log",
-		"type=unique":            "table type unique",
-		"type=aggregation":       "table type aggregation",
+		"MyContract":          "contract name",
+		"0x1234567890abcdef":  "contract address",
+		"Transfer":            "Transfer event",
+		"Balance":             "Balance event",
+		"Volume":              "Volume event",
+		"mycontract_transfer": "table name for Transfer",
+		"type=log":            "table type log",
+		"type=unique":         "table type unique",
+		"type=aggregation":    "table type aggregation",
 	}
 	for substr, desc := range checks {
 		if !strings.Contains(output, substr) {

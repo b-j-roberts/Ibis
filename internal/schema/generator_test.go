@@ -11,7 +11,7 @@ import (
 
 // --- Helpers ---
 
-func testEventDef(name string, keyMembers []abi.FieldDef, dataMembers []abi.FieldDef) *abi.EventDef {
+func testEventDef(name string, keyMembers, dataMembers []abi.FieldDef) *abi.EventDef {
 	return &abi.EventDef{
 		Name:        name,
 		FullName:    "test::" + name,

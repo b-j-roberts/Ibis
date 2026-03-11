@@ -14,7 +14,7 @@ import (
 // processEvent decodes a raw event and writes it to the store.
 // Pipeline: match selector -> find ABI definition -> decode fields ->
 // generate operation -> apply to store -> track in pending tracker.
-func (e *Engine) processEvent(ctx context.Context, raw provider.RawEvent) error {
+func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error {
 	// Find which contract this event belongs to.
 	cs := e.findContract(raw.ContractAddress)
 	if cs == nil {
@@ -119,4 +119,3 @@ func (e *Engine) nextLogIndex(blockNumber uint64) uint64 {
 	e.logIndices[blockNumber] = idx + 1
 	return idx
 }
-

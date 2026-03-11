@@ -149,7 +149,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *memory.MemoryStore) {
 	st.SetCursor(ctx, 102)
 
 	// Build API server.
-	srv := api.New(api.ServerConfig{
+	srv := api.New(&api.ServerConfig{
 		Store:   st,
 		Schemas: []*types.TableSchema{logSchema, uniqueSchema, aggSchema},
 		APIConfig: &config.APIConfig{

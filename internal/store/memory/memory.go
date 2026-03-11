@@ -54,9 +54,7 @@ func (s *MemoryStore) ApplyOperations(_ context.Context, ops []store.Operation) 
 	defer s.mu.Unlock()
 
 	for _, op := range ops {
-		if err := s.applyOp(op); err != nil {
-			return fmt.Errorf("applying operation on %s: %w", op.Table, err)
-		}
+		s.applyOp(op)
 	}
 	return nil
 }
@@ -69,7 +67,7 @@ func (s *MemoryStore) RevertOperations(ctx context.Context, ops []store.Operatio
 	return s.ApplyOperations(ctx, reversed)
 }
 
-func (s *MemoryStore) applyOp(op store.Operation) error {
+func (s *MemoryStore) applyOp(op store.Operation) {
 	schema, hasSchema := s.schemas[op.Table]
 	key := eventKey(op.BlockNumber, op.LogIndex)
 
@@ -147,8 +145,6 @@ func (s *MemoryStore) applyOp(op store.Operation) error {
 			s.applyAggDelta(op.Table, schema.Aggregates, op.Data, true)
 		}
 	}
-
-	return nil
 }
 
 func (s *MemoryStore) applyAggDelta(table string, specs []types.AggregateSpec, data map[string]any, subtract bool) {
