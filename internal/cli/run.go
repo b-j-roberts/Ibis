@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/b-j-roberts/ibis/internal/api"
 	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/engine"
 	"github.com/b-j-roberts/ibis/internal/provider"
@@ -63,7 +64,27 @@ var runCmd = &cobra.Command{
 
 		eng := engine.New(cfg, st, prov, logger)
 
-		fmt.Fprintln(cmd.OutOrStdout(), "\nStarting indexer...")
+		// Setup engine (resolve ABIs, build schemas, create tables).
+		if err := eng.Setup(ctx); err != nil {
+			return fmt.Errorf("engine setup: %w", err)
+		}
+
+		// Start API server in background.
+		apiServer := api.New(api.ServerConfig{
+			Store:     st,
+			Schemas:   eng.Schemas(),
+			APIConfig: &cfg.API,
+			Contracts: cfg.Contracts,
+			Logger:    logger,
+		})
+		go func() {
+			if err := apiServer.Start(ctx); err != nil {
+				logger.Error("API server error", "error", err)
+			}
+		}()
+
+		fmt.Fprintf(cmd.OutOrStdout(), "\nAPI server listening on %s:%d\n", cfg.API.Host, cfg.API.Port)
+		fmt.Fprintln(cmd.OutOrStdout(), "Starting indexer...")
 		if err := eng.Run(ctx); err != nil {
 			return fmt.Errorf("engine: %w", err)
 		}

@@ -1,0 +1,194 @@
+package api
+
+import (
+	"net/http"
+
+	"github.com/b-j-roberts/ibis/internal/store"
+	"github.com/b-j-roberts/ibis/internal/types"
+)
+
+// listResponse is the standard JSON envelope for list endpoints.
+type listResponse struct {
+	Data   []map[string]any `json:"data"`
+	Count  int              `json:"count"`
+	Limit  int              `json:"limit"`
+	Offset int              `json:"offset"`
+}
+
+func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
+	contract := r.PathValue("contract")
+	event := r.PathValue("event")
+
+	schema := s.lookupSchema(contract, event)
+	if schema == nil {
+		writeError(w, http.StatusNotFound, "table not found")
+		return
+	}
+
+	q, err := parseQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	events, err := s.store.GetEvents(r.Context(), schema.Name, q)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		s.logger.Error("GetEvents failed", "table", schema.Name, "error", err)
+		return
+	}
+
+	data := eventsToMaps(events)
+	writeJSON(w, http.StatusOK, listResponse{
+		Data:   data,
+		Count:  len(data),
+		Limit:  q.Limit,
+		Offset: q.Offset,
+	})
+}
+
+func (s *Server) handleGetLatest(w http.ResponseWriter, r *http.Request) {
+	contract := r.PathValue("contract")
+	event := r.PathValue("event")
+
+	schema := s.lookupSchema(contract, event)
+	if schema == nil {
+		writeError(w, http.StatusNotFound, "table not found")
+		return
+	}
+
+	q := store.Query{
+		Limit:    1,
+		OrderBy:  "block_number",
+		OrderDir: store.OrderDesc,
+	}
+
+	events, err := s.store.GetEvents(r.Context(), schema.Name, q)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		s.logger.Error("GetEvents failed", "table", schema.Name, "error", err)
+		return
+	}
+
+	if len(events) == 0 {
+		writeError(w, http.StatusNotFound, "no events found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"data": events[0].Data})
+}
+
+func (s *Server) handleGetCount(w http.ResponseWriter, r *http.Request) {
+	contract := r.PathValue("contract")
+	event := r.PathValue("event")
+
+	schema := s.lookupSchema(contract, event)
+	if schema == nil {
+		writeError(w, http.StatusNotFound, "table not found")
+		return
+	}
+
+	filters, err := parseFiltersFromURL(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	count, err := s.store.CountEvents(r.Context(), schema.Name, filters)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "count failed")
+		s.logger.Error("CountEvents failed", "table", schema.Name, "error", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"count": count})
+}
+
+func (s *Server) handleGetUnique(w http.ResponseWriter, r *http.Request) {
+	contract := r.PathValue("contract")
+	event := r.PathValue("event")
+
+	schema := s.lookupSchema(contract, event)
+	if schema == nil {
+		writeError(w, http.StatusNotFound, "table not found")
+		return
+	}
+
+	q, err := parseQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	events, err := s.store.GetUniqueEvents(r.Context(), schema.Name, q)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		s.logger.Error("GetUniqueEvents failed", "table", schema.Name, "error", err)
+		return
+	}
+
+	data := eventsToMaps(events)
+	writeJSON(w, http.StatusOK, listResponse{
+		Data:   data,
+		Count:  len(data),
+		Limit:  q.Limit,
+		Offset: q.Offset,
+	})
+}
+
+func (s *Server) handleGetAggregate(w http.ResponseWriter, r *http.Request) {
+	contract := r.PathValue("contract")
+	event := r.PathValue("event")
+
+	schema := s.lookupSchema(contract, event)
+	if schema == nil {
+		writeError(w, http.StatusNotFound, "table not found")
+		return
+	}
+
+	result, err := s.store.GetAggregation(r.Context(), schema.Name, store.Query{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "aggregation failed")
+		s.logger.Error("GetAggregation failed", "table", schema.Name, "error", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"data": result.Values})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	cursor, err := s.store.GetCursor(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get cursor")
+		return
+	}
+
+	contracts := make([]map[string]any, 0, len(s.contracts))
+	for _, c := range s.contracts {
+		contracts = append(contracts, map[string]any{
+			"name":    c.Name,
+			"address": c.Address,
+			"events":  len(c.Events),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"current_block": cursor,
+		"contracts":     contracts,
+	})
+}
+
+func eventsToMaps(events []types.IndexedEvent) []map[string]any {
+	if events == nil {
+		return []map[string]any{}
+	}
+	data := make([]map[string]any, len(events))
+	for i, evt := range events {
+		data[i] = evt.Data
+	}
+	return data
+}

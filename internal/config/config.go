@@ -38,8 +38,9 @@ type BadgerConfig struct {
 }
 
 type APIConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host        string   `yaml:"host"`
+	Port        int      `yaml:"port"`
+	CORSOrigins []string `yaml:"cors_origins"`
 }
 
 type IndexerConfig struct {

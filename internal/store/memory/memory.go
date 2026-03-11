@@ -311,6 +311,24 @@ func (s *MemoryStore) MigrateTable(ctx context.Context, schema *types.TableSchem
 	return s.CreateTable(ctx, schema)
 }
 
+func (s *MemoryStore) CountEvents(_ context.Context, table string, filters []store.Filter) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tbl := s.events[table]
+	if tbl == nil {
+		return 0, nil
+	}
+
+	var count int64
+	for _, evt := range tbl {
+		if matchFilters(&evt, filters) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (s *MemoryStore) Close() error {
 	return nil
 }

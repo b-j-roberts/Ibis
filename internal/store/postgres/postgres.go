@@ -569,6 +569,18 @@ func (s *PostgresStore) MigrateTable(ctx context.Context, sch *types.TableSchema
 	return nil
 }
 
+func (s *PostgresStore) CountEvents(ctx context.Context, table string, filters []store.Filter) (int64, error) {
+	var args []any
+	argIdx := 1
+	where := s.buildWhereClause(filters, &args, &argIdx)
+
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s%s", table, where)
+
+	var count int64
+	err := s.pool.QueryRow(ctx, query, args...).Scan(&count)
+	return count, err
+}
+
 func (s *PostgresStore) Close() error {
 	s.pool.Close()
 	return nil

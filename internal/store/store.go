@@ -39,6 +39,9 @@ type Store interface {
 	// MigrateTable updates a table schema (adds new columns, never drops).
 	MigrateTable(ctx context.Context, schema *types.TableSchema) error
 
+	// CountEvents returns the total number of events matching the filters.
+	CountEvents(ctx context.Context, table string, filters []Filter) (int64, error)
+
 	// Close releases all resources held by the store.
 	Close() error
 }

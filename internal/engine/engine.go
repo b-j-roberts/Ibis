@@ -55,6 +55,9 @@ type Engine struct {
 
 	// Confirmation depth: blocks past this depth are considered confirmed.
 	confirmDepth uint64
+
+	// setupDone tracks whether Setup has been called.
+	setupDone bool
 }
 
 // New creates an Engine with the given dependencies.
@@ -80,13 +83,39 @@ func (e *Engine) SetConfirmationDepth(depth uint64) {
 	e.confirmDepth = depth
 }
 
+// Setup resolves ABIs, builds event registries and table schemas, and creates
+// tables in the store. Call this before Run to access Schemas() for the API server.
+func (e *Engine) Setup(ctx context.Context) error {
+	if e.setupDone {
+		return nil
+	}
+	if err := e.setup(ctx); err != nil {
+		return fmt.Errorf("engine setup: %w", err)
+	}
+	e.setupDone = true
+	return nil
+}
+
+// Schemas returns all table schemas built during Setup.
+func (e *Engine) Schemas() []*types.TableSchema {
+	var schemas []*types.TableSchema
+	for _, cs := range e.contracts {
+		for _, s := range cs.schemas {
+			schemas = append(schemas, s)
+		}
+	}
+	return schemas
+}
+
 // Run starts the indexing engine. It resolves ABIs, creates table schemas,
 // determines the starting block, starts the event subscriber, and processes
 // events until the context is cancelled.
 func (e *Engine) Run(ctx context.Context) error {
 	// Step 1: Resolve ABIs and build per-contract state.
-	if err := e.setup(ctx); err != nil {
-		return fmt.Errorf("engine setup: %w", err)
+	if !e.setupDone {
+		if err := e.setup(ctx); err != nil {
+			return fmt.Errorf("engine setup: %w", err)
+		}
 	}
 
 	// Step 2: Determine starting block.

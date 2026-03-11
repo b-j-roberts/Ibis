@@ -491,6 +491,42 @@ func (s *BadgerStore) MigrateTable(ctx context.Context, schema *types.TableSchem
 	return s.CreateTable(ctx, schema)
 }
 
+func (s *BadgerStore) CountEvents(_ context.Context, table string, filters []store.Filter) (int64, error) {
+	prefix := evtPrefix(table)
+	var count int64
+
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		opts := badgerdb.DefaultIteratorOptions
+		opts.Prefix = prefix
+		if len(filters) == 0 {
+			opts.PrefetchValues = false
+		}
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefix); it.Valid(); it.Next() {
+			if len(filters) == 0 {
+				count++
+				continue
+			}
+			item := it.Item()
+			var evt types.IndexedEvent
+			if err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &evt.Data)
+			}); err != nil {
+				return err
+			}
+			s.populateFromData(&evt)
+			if matchFilters(&evt, filters) {
+				count++
+			}
+		}
+		return nil
+	})
+
+	return count, err
+}
+
 func (s *BadgerStore) Close() error {
 	return s.db.Close()
 }

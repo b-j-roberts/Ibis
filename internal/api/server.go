@@ -1,0 +1,183 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/b-j-roberts/ibis/internal/config"
+	"github.com/b-j-roberts/ibis/internal/store"
+	"github.com/b-j-roberts/ibis/internal/types"
+)
+
+// Server is the auto-generated REST API server. It generates endpoints from
+// ABI-derived table schemas with Supabase-style query syntax.
+type Server struct {
+	store     store.Store
+	schemas   map[string]*types.TableSchema // "contract/event" -> schema
+	cfg       *config.APIConfig
+	contracts []config.ContractConfig
+	logger    *slog.Logger
+	server    *http.Server
+}
+
+// ServerConfig holds the dependencies needed to create an API server.
+type ServerConfig struct {
+	Store     store.Store
+	Schemas   []*types.TableSchema
+	APIConfig *config.APIConfig
+	Contracts []config.ContractConfig
+	Logger    *slog.Logger
+}
+
+// New creates an API Server from the given configuration.
+func New(cfg ServerConfig) *Server {
+	schemaMap := make(map[string]*types.TableSchema)
+	for _, s := range cfg.Schemas {
+		key := strings.ToLower(s.Contract) + "/" + strings.ToLower(s.Event)
+		schemaMap[key] = s
+	}
+
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return &Server{
+		store:     cfg.Store,
+		schemas:   schemaMap,
+		cfg:       cfg.APIConfig,
+		contracts: cfg.Contracts,
+		logger:    logger.With("component", "api"),
+	}
+}
+
+// Handler returns the configured http.Handler (for testing with httptest).
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+	return s.corsMiddleware(s.loggingMiddleware(mux))
+}
+
+// Start begins serving HTTP requests. It blocks until the context is cancelled.
+func (s *Server) Start(ctx context.Context) error {
+	handler := s.Handler()
+
+	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+	s.server = &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	s.logger.Info("API server starting", "addr", addr)
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.server.Shutdown(shutdownCtx)
+	}()
+
+	if err := s.server.ListenAndServe(); err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) registerRoutes(mux *http.ServeMux) {
+	// System endpoints.
+	mux.HandleFunc("GET /v1/health", s.handleHealth)
+	mux.HandleFunc("GET /v1/status", s.handleStatus)
+
+	// Event table endpoints (more specific paths registered first).
+	mux.HandleFunc("GET /v1/{contract}/{event}/latest", s.handleGetLatest)
+	mux.HandleFunc("GET /v1/{contract}/{event}/count", s.handleGetCount)
+	mux.HandleFunc("GET /v1/{contract}/{event}/unique", s.handleGetUnique)
+	mux.HandleFunc("GET /v1/{contract}/{event}/aggregate", s.handleGetAggregate)
+	mux.HandleFunc("GET /v1/{contract}/{event}", s.handleListEvents)
+}
+
+// lookupSchema finds a table schema by contract name and event name (case-insensitive).
+func (s *Server) lookupSchema(contract, event string) *types.TableSchema {
+	key := strings.ToLower(contract) + "/" + strings.ToLower(event)
+	return s.schemas[key]
+}
+
+// ---- Middleware ----
+
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+
+		origins := s.cfg.CORSOrigins
+		if len(origins) == 0 {
+			origins = []string{"*"}
+		}
+
+		allowed := false
+		for _, o := range origins {
+			if o == "*" || o == origin {
+				allowed = true
+				break
+			}
+		}
+
+		if allowed {
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
+		}
+
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		s.logger.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.status,
+			"duration", time.Since(start),
+		)
+	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// ---- JSON helpers ----
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
