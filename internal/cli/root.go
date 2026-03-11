@@ -1,10 +1,17 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
 var cfgPath string
+
+// SetVersion configures the version output for --version.
+func SetVersion(version, commit, date string) {
+	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "ibis",

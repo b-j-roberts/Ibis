@@ -1,6 +1,7 @@
 # Go binaries
 bin/
 /ibis
+dist/
 *.exe
 *.exe~
 *.dll
