@@ -141,7 +141,13 @@ func (p *StarknetProvider) GetEvents(ctx context.Context, opts GetEventsOptions)
 	return allEvents, nil
 }
 
-// GetClassAt fetches the contract class (ABI) at the given address.
+// ClassAt fetches the contract class at the given address.
+// Satisfies the config.ABIFetcher interface for chain-based ABI resolution.
+func (p *StarknetProvider) ClassAt(ctx context.Context, blockID rpc.BlockID, contractAddress *felt.Felt) (rpc.ClassOutput, error) {
+	return p.httpRPC.ClassAt(ctx, blockID, contractAddress)
+}
+
+// GetClassAt fetches the contract class (ABI) at the given address as raw JSON.
 func (p *StarknetProvider) GetClassAt(ctx context.Context, address *felt.Felt) (json.RawMessage, error) {
 	result, err := p.httpRPC.ClassAt(ctx, rpc.BlockID{Tag: rpc.BlockTagLatest}, address)
 	if err != nil {

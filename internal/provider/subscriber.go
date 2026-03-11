@@ -68,6 +68,13 @@ func defaultWSSDialer(ctx context.Context, wsURL string, input *rpc.EventSubscri
 	}, nil
 }
 
+// ReorgNotification informs the engine about a chain reorganization.
+// StartBlock is the first orphaned block; EndBlock is the last.
+type ReorgNotification struct {
+	StartBlock uint64
+	EndBlock   uint64
+}
+
 // SubscriberConfig configures the event subscriber behavior.
 type SubscriberConfig struct {
 	// BlocksPerQuery is the max block range per polling request. Default: 100.
@@ -80,6 +87,7 @@ type EventSubscriber struct {
 	provider       *StarknetProvider
 	contracts      []ContractSubscription
 	events         chan<- RawEvent
+	reorgs         chan<- ReorgNotification
 	logger         *slog.Logger
 	blocksPerQuery uint64
 
@@ -103,6 +111,11 @@ func (p *StarknetProvider) NewSubscriber(contracts []ContractSubscription, event
 		blocksPerQuery: blocksPerQuery,
 		dialWSS:        defaultWSSDialer,
 	}
+}
+
+// SetReorgChan sets the channel for reorg notifications. Must be called before Start.
+func (s *EventSubscriber) SetReorgChan(ch chan<- ReorgNotification) {
+	s.reorgs = ch
 }
 
 // Start begins event subscription for all contracts. Blocks until ctx is cancelled.
@@ -242,7 +255,18 @@ func (s *EventSubscriber) processWSSEvents(ctx context.Context, session *wssSess
 					"start_block", reorg.StartBlockNum,
 					"end_block", reorg.EndBlockNum,
 				)
-				// Reset to reorg start so the engine can re-process.
+				// Notify the engine so it can revert stored data.
+				if s.reorgs != nil {
+					select {
+					case s.reorgs <- ReorgNotification{
+						StartBlock: reorg.StartBlockNum,
+						EndBlock:   reorg.EndBlockNum,
+					}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				// Reset to reorg start so the subscriber re-fetches.
 				if reorg.StartBlockNum < *lastBlock {
 					*lastBlock = reorg.StartBlockNum
 				}

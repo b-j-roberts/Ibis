@@ -1,0 +1,72 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/b-j-roberts/ibis/internal/provider"
+)
+
+// handleReorg reverts all stored operations for blocks in the orphaned range
+// [startBlock, endBlock], then resets the cursor.
+func (e *Engine) handleReorg(ctx context.Context, reorg provider.ReorgNotification) error {
+	e.logger.Warn("handling reorg",
+		"start_block", reorg.StartBlock,
+		"end_block", reorg.EndBlock,
+	)
+
+	// Revert blocks in reverse order (highest first).
+	pendingBlocks := e.pending.BlockRange()
+	for i := len(pendingBlocks) - 1; i >= 0; i-- {
+		block := pendingBlocks[i]
+		if block < reorg.StartBlock || block > reorg.EndBlock {
+			continue
+		}
+
+		ops := e.pending.GetBlock(block)
+		if len(ops) == 0 {
+			continue
+		}
+
+		if err := e.store.RevertOperations(ctx, ops); err != nil {
+			return fmt.Errorf("reverting block %d: %w", block, err)
+		}
+
+		e.pending.RemoveBlock(block)
+
+		// Clean up log index tracking for reverted block.
+		delete(e.logIndices, block)
+
+		e.logger.Info("reverted block", "block", block, "ops", len(ops))
+	}
+
+	// Reset cursor to just before the reorg start.
+	newCursor := reorg.StartBlock
+	if newCursor > 0 {
+		newCursor--
+	}
+	if err := e.store.SetCursor(ctx, newCursor); err != nil {
+		return fmt.Errorf("resetting cursor to %d: %w", newCursor, err)
+	}
+
+	e.logger.Info("reorg handled", "new_cursor", newCursor)
+	return nil
+}
+
+// confirmBlocks promotes blocks that are past the confirmation depth.
+// Blocks at (currentBlock - confirmDepth) or earlier are considered confirmed
+// and their revert data is discarded.
+func (e *Engine) confirmBlocks(currentBlock uint64) {
+	if currentBlock < e.confirmDepth {
+		return
+	}
+	confirmUpTo := currentBlock - e.confirmDepth
+	e.pending.ConfirmUpTo(confirmUpTo)
+
+	// Clean up log index tracking for confirmed blocks.
+	for block := range e.logIndices {
+		if block <= confirmUpTo {
+			delete(e.logIndices, block)
+		}
+	}
+}
