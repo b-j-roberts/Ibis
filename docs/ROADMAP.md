@@ -363,7 +363,7 @@
 
 **Implementation Notes**:
 - Build as a Claude Code skill (not embedded in the ibis binary)
-- Skill reads the config and schema to understand what data is available
+- Skill reads and/or queries the config and schema to understand what data is available
 - Generates `ibis query` commands with appropriate filters
 - Can also hit the REST API if the server is running
 
