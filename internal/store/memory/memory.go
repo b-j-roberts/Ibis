@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -455,6 +456,12 @@ func toFloat64(v any) float64 {
 		return float64(n)
 	case json.Number:
 		f, _ := n.Float64()
+		return f
+	case string:
+		f, err := strconv.ParseFloat(n, 64)
+		if err != nil {
+			return 0
+		}
 		return f
 	default:
 		return 0

@@ -378,6 +378,7 @@
 - [ ] Recommends table types (log vs unique vs aggregation) based on event semantics
 - [ ] Generates complete `ibis.config.yaml`
 - [ ] Supports iterative refinement ("also add the Transfer events", "make the price table unique by pair_id")
+- [ ] If skill used inside contract dir, potentially inspect contract code to gain deeper understanding and provide enhanced recommendations
 
 **Implementation Notes**:
 - Build as a Claude Code skill that calls the Starknet RPC to fetch ABIs
