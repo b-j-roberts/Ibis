@@ -27,11 +27,16 @@ type Store interface {
 	// GetAggregation returns computed aggregate values for an aggregation table.
 	GetAggregation(ctx context.Context, table string, query Query) (AggResult, error)
 
-	// GetCursor returns the last processed block number, or 0 if no cursor exists.
-	GetCursor(ctx context.Context) (uint64, error)
+	// GetCursor returns the last processed block number for the given contract,
+	// or 0 if no cursor exists.
+	GetCursor(ctx context.Context, contract string) (uint64, error)
 
-	// SetCursor persists the last processed block number.
-	SetCursor(ctx context.Context, blockNumber uint64) error
+	// SetCursor persists the last processed block number for the given contract.
+	SetCursor(ctx context.Context, contract string, blockNumber uint64) error
+
+	// GetAllCursors returns a map of contract name to last processed block number
+	// for all contracts that have a persisted cursor.
+	GetAllCursors(ctx context.Context) (map[string]uint64, error)
 
 	// CreateTable initializes a table from the given schema.
 	CreateTable(ctx context.Context, schema *types.TableSchema) error

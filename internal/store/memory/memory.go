@@ -28,8 +28,8 @@ type MemoryStore struct {
 	// schemas stores table schema definitions.
 	schemas map[string]types.TableSchema
 
-	cursor uint64
-	mu     sync.RWMutex
+	cursors map[string]uint64
+	mu      sync.RWMutex
 }
 
 // New creates a new in-memory store.
@@ -39,6 +39,7 @@ func New() *MemoryStore {
 		uniqueEntries: make(map[string]map[string]types.IndexedEvent),
 		aggregations:  make(map[string]map[string]float64),
 		schemas:       make(map[string]types.TableSchema),
+		cursors:       make(map[string]uint64),
 	}
 }
 
@@ -284,17 +285,27 @@ func (s *MemoryStore) GetAggregation(_ context.Context, table string, _ store.Qu
 	return result, nil
 }
 
-func (s *MemoryStore) GetCursor(_ context.Context) (uint64, error) {
+func (s *MemoryStore) GetCursor(_ context.Context, contract string) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cursor, nil
+	return s.cursors[contract], nil
 }
 
-func (s *MemoryStore) SetCursor(_ context.Context, blockNumber uint64) error {
+func (s *MemoryStore) SetCursor(_ context.Context, contract string, blockNumber uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cursor = blockNumber
+	s.cursors[contract] = blockNumber
 	return nil
+}
+
+func (s *MemoryStore) GetAllCursors(_ context.Context) (map[string]uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]uint64, len(s.cursors))
+	for k, v := range s.cursors {
+		result[k] = v
+	}
+	return result, nil
 }
 
 func (s *MemoryStore) CreateTable(_ context.Context, schema *types.TableSchema) error {

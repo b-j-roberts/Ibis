@@ -22,7 +22,7 @@ import (
 //	rev:{table}:{invertedBlock}:{logIndex}   → reverse index (descending by block)
 //	unq:{table}:{uniqueKey}                  → unique index (last-write-wins)
 //	agg:{table}                              → aggregation data
-//	meta:cursor                              → last processed block number
+//	meta:cursor:{contract}                   → per-contract last processed block number
 //	schema:{table}                           → table schema definition
 const (
 	prefixEvt    = "evt:"
@@ -30,7 +30,7 @@ const (
 	prefixUnq    = "unq:"
 	prefixAgg    = "agg:"
 	prefixSchema = "schema:"
-	keyCursor    = "meta:cursor"
+	prefixCursor = "meta:cursor:"
 )
 
 // BadgerStore implements store.Store using BadgerDB v4.
@@ -441,10 +441,11 @@ func (s *BadgerStore) GetAggregation(ctx context.Context, table string, q store.
 	return result, err
 }
 
-func (s *BadgerStore) GetCursor(ctx context.Context) (uint64, error) {
+func (s *BadgerStore) GetCursor(_ context.Context, contract string) (uint64, error) {
 	var cursor uint64
+	key := []byte(prefixCursor + contract)
 	err := s.db.View(func(txn *badgerdb.Txn) error {
-		item, err := txn.Get([]byte(keyCursor))
+		item, err := txn.Get(key)
 		if err == badgerdb.ErrKeyNotFound {
 			return nil
 		}
@@ -461,12 +462,40 @@ func (s *BadgerStore) GetCursor(ctx context.Context) (uint64, error) {
 	return cursor, err
 }
 
-func (s *BadgerStore) SetCursor(ctx context.Context, blockNumber uint64) error {
+func (s *BadgerStore) SetCursor(_ context.Context, contract string, blockNumber uint64) error {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], blockNumber)
+	key := []byte(prefixCursor + contract)
 	return s.db.Update(func(txn *badgerdb.Txn) error {
-		return txn.Set([]byte(keyCursor), buf[:])
+		return txn.Set(key, buf[:])
 	})
+}
+
+func (s *BadgerStore) GetAllCursors(_ context.Context) (map[string]uint64, error) {
+	result := make(map[string]uint64)
+	prefix := []byte(prefixCursor)
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		opts := badgerdb.DefaultIteratorOptions
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefix); it.Valid(); it.Next() {
+			item := it.Item()
+			// Extract contract name from key: "meta:cursor:{contract}"
+			contract := strings.TrimPrefix(string(item.Key()), string(prefix))
+			if err := item.Value(func(val []byte) error {
+				if len(val) == 8 {
+					result[contract] = binary.BigEndian.Uint64(val)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return result, err
 }
 
 func (s *BadgerStore) CreateTable(ctx context.Context, schema *types.TableSchema) error {

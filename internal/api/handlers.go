@@ -161,23 +161,37 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	cursor, err := s.store.GetCursor(r.Context())
+	cursors, err := s.store.GetAllCursors(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get cursor")
+		writeError(w, http.StatusInternalServerError, "failed to get cursors")
 		return
+	}
+
+	// Compute global cursor as min of all persisted contract cursors.
+	// Contracts that haven't processed any events yet are excluded
+	// from the min so they don't drag global progress to zero.
+	var globalCursor uint64
+	first := true
+	for _, cur := range cursors {
+		if first || cur < globalCursor {
+			globalCursor = cur
+			first = false
+		}
 	}
 
 	contracts := make([]map[string]any, 0, len(s.contracts))
 	for _, c := range s.contracts {
-		contracts = append(contracts, map[string]any{
-			"name":    c.Name,
-			"address": c.Address,
-			"events":  len(c.Events),
-		})
+		entry := map[string]any{
+			"name":          c.Name,
+			"address":       c.Address,
+			"events":        len(c.Events),
+			"current_block": cursors[c.Name],
+		}
+		contracts = append(contracts, entry)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"current_block": cursor,
+		"current_block": globalCursor,
 		"contracts":     contracts,
 	})
 }

@@ -146,7 +146,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *memory.MemoryStore) {
 	st.ApplyOperations(ctx, volumes)
 
 	// Set cursor.
-	st.SetCursor(ctx, 102)
+	st.SetCursor(ctx, "MyToken", 102)
 
 	// Build API server.
 	srv := api.New(&api.ServerConfig{

@@ -77,9 +77,9 @@ func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error
 	// Track for potential revert.
 	e.pending.Track(raw.BlockNumber, op)
 
-	// Update cursor.
-	if err := e.store.SetCursor(ctx, raw.BlockNumber); err != nil {
-		return fmt.Errorf("setting cursor: %w", err)
+	// Update per-contract cursor.
+	if err := e.store.SetCursor(ctx, cs.config.Name, raw.BlockNumber); err != nil {
+		return fmt.Errorf("setting cursor for %s: %w", cs.config.Name, err)
 	}
 
 	// Promote confirmed blocks.

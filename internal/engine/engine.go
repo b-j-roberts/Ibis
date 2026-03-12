@@ -129,15 +129,20 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 	}
 
-	// Step 2: Determine starting block.
-	startBlock, err := e.determineStartBlock(ctx)
+	// Step 2: Determine per-contract starting blocks.
+	startBlocks, err := e.determineStartBlocks(ctx)
 	if err != nil {
-		return fmt.Errorf("determine start block: %w", err)
+		return fmt.Errorf("determine start blocks: %w", err)
 	}
-	e.logger.Info("starting indexer", "start_block", startBlock)
+	for _, cs := range e.contracts {
+		e.logger.Info("contract start block",
+			"contract", cs.config.Name,
+			"start_block", startBlocks[cs.config.Name],
+		)
+	}
 
 	// Step 3: Build subscriptions and start the subscriber.
-	subs := e.buildSubscriptions(startBlock)
+	subs := e.buildSubscriptions(startBlocks)
 	subscriber := e.provider.NewSubscriber(subs, e.events, &provider.SubscriberConfig{
 		BlocksPerQuery: uint64(e.cfg.Indexer.BatchSize) * 10,
 	})
@@ -223,42 +228,57 @@ func (e *Engine) setup(ctx context.Context) error {
 	return nil
 }
 
-// determineStartBlock computes the block number to begin indexing from.
-// Logic: max(persisted_cursor + 1, config_start_block).
+// determineStartBlocks computes the starting block for each contract independently.
+// Logic per contract: max(persisted_cursor + 1, config_start_block).
 // If both are 0, starts from the latest chain block.
-func (e *Engine) determineStartBlock(ctx context.Context) (uint64, error) {
-	cursor, err := e.store.GetCursor(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("get cursor: %w", err)
-	}
+func (e *Engine) determineStartBlocks(ctx context.Context) (map[string]uint64, error) {
+	result := make(map[string]uint64, len(e.contracts))
 
-	configStart := e.cfg.Indexer.StartBlock
+	// Lazily fetch latest block only if needed.
+	var latestBlock uint64
+	var latestFetched bool
 
-	if configStart == 0 && cursor == 0 {
-		latest, err := e.provider.BlockNumber(ctx)
+	for _, cs := range e.contracts {
+		cursor, err := e.store.GetCursor(ctx, cs.config.Name)
 		if err != nil {
-			return 0, fmt.Errorf("get latest block: %w", err)
+			return nil, fmt.Errorf("get cursor for %s: %w", cs.config.Name, err)
 		}
-		return latest, nil
+
+		configStart := e.cfg.Indexer.StartBlock
+
+		if configStart == 0 && cursor == 0 {
+			if !latestFetched {
+				latest, err := e.provider.BlockNumber(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("get latest block: %w", err)
+				}
+				latestBlock = latest
+				latestFetched = true
+			}
+			result[cs.config.Name] = latestBlock
+			continue
+		}
+
+		startBlock := configStart
+		if cursor > 0 && cursor+1 > startBlock {
+			startBlock = cursor + 1
+		}
+		result[cs.config.Name] = startBlock
 	}
 
-	startBlock := configStart
-	if cursor > 0 && cursor+1 > startBlock {
-		startBlock = cursor + 1
-	}
-
-	return startBlock, nil
+	return result, nil
 }
 
 // buildSubscriptions creates ContractSubscription entries for the subscriber.
+// Each contract gets its own start block from its persisted cursor.
 // If a contract only configures specific events (no wildcard "*"), the
 // subscription includes a Keys filter so the node only sends matching events.
-func (e *Engine) buildSubscriptions(startBlock uint64) []provider.ContractSubscription {
+func (e *Engine) buildSubscriptions(startBlocks map[string]uint64) []provider.ContractSubscription {
 	subs := make([]provider.ContractSubscription, 0, len(e.contracts))
 	for _, cs := range e.contracts {
 		sub := provider.ContractSubscription{
 			Address:    cs.address,
-			StartBlock: startBlock,
+			StartBlock: startBlocks[cs.config.Name],
 		}
 
 		// Only set key filters when there is no wildcard event configured.

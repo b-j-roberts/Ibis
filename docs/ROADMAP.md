@@ -418,7 +418,7 @@
 
 **Implementation Notes**:
 - Config shape: `contracts: [{ name: MyDEX, group: dex, address: "0x...", ... }]`
-- The group field is optional — omitting it preserves backward compatibility with existing configs
+- The group field is optional
 - API route registration: if group is set, register `GET /v1/{group}/{contract}/{event}`, otherwise `GET /v1/{contract}/{event}`
 - Schema generator: when group is present, `BuildTableSchema` uses `{group}_{contract}_{event}` as table name
 - Reserve the group name `_all` (used in 3.5 for cross-contract queries)
@@ -499,8 +499,6 @@
 - [ ] New dynamically-added contracts start from their specified start block regardless of other contracts' positions
 - [ ] Backfill runs per-contract: each contract can independently catch up via `starknet_getEvents`
 - [ ] Status endpoint shows per-contract sync progress: current block, target block, sync percentage, status
-- [ ] Migration path: existing single-cursor deployments auto-migrate to per-contract cursors on upgrade (assign current global cursor to all existing contracts)
-- [ ] Unit tests for migration and concurrent multi-cursor updates
 
 **Implementation Notes**:
 - Postgres: create `_ibis_cursors` table with `(contract_name TEXT PRIMARY KEY, last_block BIGINT, updated_at TIMESTAMP)`
@@ -509,7 +507,6 @@
 - The global cursor becomes `min(all contract cursors)` — used for `/v1/status` overall block height
 - Engine startup sequence changes: instead of one `determineStartingBlock`, each contract calls it independently
 - Per-contract backfill can run concurrently (one goroutine per contract doing `starknet_getEvents` catchup), with rate limiting to avoid overwhelming the RPC node
-- Backward compatibility: if no per-contract cursors exist, fall back to reading the legacy `meta:cursor` key
 
 ### 3.9 Contract Discovery by Class Hash
 
@@ -599,7 +596,6 @@
 - [ ] Aggregation tables: support both per-contract and cross-contract aggregation modes
 - [ ] Index on `contract_address` column for efficient per-child queries
 - [ ] Schema creation deferred until first child registration (factory starts with 0 children)
-- [ ] Backward compatibility: `shared_tables: false` (default) preserves current per-contract table behavior
 
 **Implementation Notes**:
 - Schema generator changes: when `shared_tables` is true, `BuildTableSchema` adds `contract_address TEXT NOT NULL` and `contract_name TEXT NOT NULL` columns, and adjusts unique constraints to be composite

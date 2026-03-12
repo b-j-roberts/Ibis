@@ -216,8 +216,8 @@ func TestProcessEvent_MatchAndDecode(t *testing.T) {
 		t.Fatalf("expected sender %s, got %v", sender.String(), events[0].Data["sender"])
 	}
 
-	// Verify cursor was updated.
-	cursor, _ := st.GetCursor(ctx)
+	// Verify per-contract cursor was updated.
+	cursor, _ := st.GetCursor(ctx, "mytoken")
 	if cursor != 100 {
 		t.Fatalf("expected cursor 100, got %d", cursor)
 	}
@@ -376,8 +376,8 @@ func TestHandleReorg_RevertsBlockOps(t *testing.T) {
 		t.Fatalf("expected remaining event from block 10, got %d", events[0].BlockNumber)
 	}
 
-	// Cursor should be reset to 10 (startBlock - 1).
-	cursor, _ := st.GetCursor(ctx)
+	// Per-contract cursor should be reset to 10 (startBlock - 1).
+	cursor, _ := st.GetCursor(ctx, "mytoken")
 	if cursor != 10 {
 		t.Fatalf("expected cursor 10 after reorg, got %d", cursor)
 	}
@@ -432,7 +432,7 @@ func TestHandleReorg_FullReorg(t *testing.T) {
 		t.Fatalf("expected 0 events after full reorg, got %d", len(events))
 	}
 
-	cursor, _ := st.GetCursor(ctx)
+	cursor, _ := st.GetCursor(ctx, "mytoken")
 	if cursor != 4 {
 		t.Fatalf("expected cursor 4 after full reorg, got %d", cursor)
 	}
@@ -611,41 +611,83 @@ func TestBuildSchemas_MetadataColumns(t *testing.T) {
 
 // --- DetermineStartBlock Tests ---
 
-func TestDetermineStartBlock_FromCursor(t *testing.T) {
+func TestDetermineStartBlocks_FromCursor(t *testing.T) {
 	st := memory.New()
 	ctx := context.Background()
-	st.SetCursor(ctx, 100)
+	st.SetCursor(ctx, "mytoken", 100)
+
+	contractAddr := new(felt.Felt).SetUint64(0xABC)
+	eventDef := testEventDef("Transfer")
+	cs := testContractState(contractAddr, "mytoken", []*abi.EventDef{eventDef}, types.TableTypeLog)
 
 	e := &Engine{
-		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: 50}},
-		store: st,
+		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: 50}},
+		store:     st,
+		contracts: []*contractState{cs},
 	}
 
-	block, err := e.determineStartBlock(ctx)
+	blocks, err := e.determineStartBlocks(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// max(cursor+1, configStart) = max(101, 50) = 101
-	if block != 101 {
-		t.Fatalf("expected start block 101, got %d", block)
+	if blocks["mytoken"] != 101 {
+		t.Fatalf("expected start block 101, got %d", blocks["mytoken"])
 	}
 }
 
-func TestDetermineStartBlock_FromConfig(t *testing.T) {
+func TestDetermineStartBlocks_FromConfig(t *testing.T) {
 	st := memory.New()
 	ctx := context.Background()
 
+	contractAddr := new(felt.Felt).SetUint64(0xABC)
+	eventDef := testEventDef("Transfer")
+	cs := testContractState(contractAddr, "mytoken", []*abi.EventDef{eventDef}, types.TableTypeLog)
+
 	e := &Engine{
-		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: 500}},
-		store: st,
+		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: 500}},
+		store:     st,
+		contracts: []*contractState{cs},
 	}
 
-	block, err := e.determineStartBlock(ctx)
+	blocks, err := e.determineStartBlocks(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if block != 500 {
-		t.Fatalf("expected start block 500, got %d", block)
+	if blocks["mytoken"] != 500 {
+		t.Fatalf("expected start block 500, got %d", blocks["mytoken"])
+	}
+}
+
+func TestDetermineStartBlocks_PerContract(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+	st.SetCursor(ctx, "contract_a", 100)
+	// contract_b has no cursor yet
+
+	addrA := new(felt.Felt).SetUint64(0xAAA)
+	addrB := new(felt.Felt).SetUint64(0xBBB)
+	eventDef := testEventDef("Transfer")
+	csA := testContractState(addrA, "contract_a", []*abi.EventDef{eventDef}, types.TableTypeLog)
+	csB := testContractState(addrB, "contract_b", []*abi.EventDef{eventDef}, types.TableTypeLog)
+
+	e := &Engine{
+		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: 50}},
+		store:     st,
+		contracts: []*contractState{csA, csB},
+	}
+
+	blocks, err := e.determineStartBlocks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Contract A has cursor 100, so start = max(101, 50) = 101.
+	if blocks["contract_a"] != 101 {
+		t.Fatalf("expected contract_a start 101, got %d", blocks["contract_a"])
+	}
+	// Contract B has no cursor, so start = max(0, 50) = 50.
+	if blocks["contract_b"] != 50 {
+		t.Fatalf("expected contract_b start 50, got %d", blocks["contract_b"])
 	}
 }
 
@@ -759,7 +801,7 @@ func TestBuildSubscriptions_WildcardLeavesKeysNil(t *testing.T) {
 	}
 
 	e := &Engine{contracts: []*contractState{cs}}
-	subs := e.buildSubscriptions(100)
+	subs := e.buildSubscriptions(map[string]uint64{"mytoken": 100})
 
 	if len(subs) != 1 {
 		t.Fatalf("expected 1 subscription, got %d", len(subs))
@@ -799,7 +841,7 @@ func TestBuildSubscriptions_ExplicitEventsPopulatesKeys(t *testing.T) {
 	}
 
 	e := &Engine{contracts: []*contractState{cs}}
-	subs := e.buildSubscriptions(50)
+	subs := e.buildSubscriptions(map[string]uint64{"mytoken": 50})
 
 	if len(subs) != 1 {
 		t.Fatalf("expected 1 subscription, got %d", len(subs))
@@ -854,7 +896,7 @@ func TestBuildSubscriptions_SingleExplicitEvent(t *testing.T) {
 	}
 
 	e := &Engine{contracts: []*contractState{cs}}
-	subs := e.buildSubscriptions(0)
+	subs := e.buildSubscriptions(map[string]uint64{"mytoken": 0})
 
 	if len(subs[0].Keys[0]) != 1 {
 		t.Fatalf("expected 1 selector in Keys[0], got %d", len(subs[0].Keys[0]))

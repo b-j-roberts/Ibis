@@ -539,7 +539,7 @@ func TestCursorPersistence(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	cursor, err := s.GetCursor(ctx)
+	cursor, err := s.GetCursor(ctx, "mycontract")
 	if err != nil {
 		t.Fatalf("get cursor: %v", err)
 	}
@@ -547,11 +547,11 @@ func TestCursorPersistence(t *testing.T) {
 		t.Errorf("expected initial cursor 0, got %d", cursor)
 	}
 
-	if err := s.SetCursor(ctx, 12345); err != nil {
+	if err := s.SetCursor(ctx, "mycontract", 12345); err != nil {
 		t.Fatalf("set cursor: %v", err)
 	}
 
-	cursor, err = s.GetCursor(ctx)
+	cursor, err = s.GetCursor(ctx, "mycontract")
 	if err != nil {
 		t.Fatalf("get cursor after set: %v", err)
 	}
@@ -559,8 +559,8 @@ func TestCursorPersistence(t *testing.T) {
 		t.Errorf("expected cursor 12345, got %d", cursor)
 	}
 
-	s.SetCursor(ctx, 99999)
-	cursor, _ = s.GetCursor(ctx)
+	s.SetCursor(ctx, "mycontract", 99999)
+	cursor, _ = s.GetCursor(ctx, "mycontract")
 	if cursor != 99999 {
 		t.Errorf("expected cursor 99999, got %d", cursor)
 	}

@@ -448,7 +448,7 @@ func TestCursorPersistence(t *testing.T) {
 	ctx := context.Background()
 
 	// Initially 0.
-	cursor, err := s.GetCursor(ctx)
+	cursor, err := s.GetCursor(ctx, "mycontract")
 	if err != nil {
 		t.Fatalf("get cursor: %v", err)
 	}
@@ -457,11 +457,11 @@ func TestCursorPersistence(t *testing.T) {
 	}
 
 	// Set cursor.
-	if err := s.SetCursor(ctx, 12345); err != nil {
+	if err := s.SetCursor(ctx, "mycontract", 12345); err != nil {
 		t.Fatalf("set cursor: %v", err)
 	}
 
-	cursor, err = s.GetCursor(ctx)
+	cursor, err = s.GetCursor(ctx, "mycontract")
 	if err != nil {
 		t.Fatalf("get cursor after set: %v", err)
 	}
@@ -470,8 +470,8 @@ func TestCursorPersistence(t *testing.T) {
 	}
 
 	// Update cursor.
-	s.SetCursor(ctx, 99999)
-	cursor, _ = s.GetCursor(ctx)
+	s.SetCursor(ctx, "mycontract", 99999)
+	cursor, _ = s.GetCursor(ctx, "mycontract")
 	if cursor != 99999 {
 		t.Errorf("expected cursor 99999, got %d", cursor)
 	}
@@ -710,13 +710,13 @@ func TestCursorPersistsAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 
 	s1, _ := New(dir)
-	s1.SetCursor(ctx, 42)
+	s1.SetCursor(ctx, "mycontract", 42)
 	s1.Close()
 
 	s2, _ := New(dir)
 	defer s2.Close()
 
-	cursor, _ := s2.GetCursor(ctx)
+	cursor, _ := s2.GetCursor(ctx, "mycontract")
 	if cursor != 42 {
 		t.Errorf("expected cursor 42 after reopen, got %d", cursor)
 	}

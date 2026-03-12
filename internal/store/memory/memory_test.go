@@ -465,7 +465,7 @@ func TestCursor(t *testing.T) {
 	ctx := context.Background()
 
 	// Initially 0.
-	cursor, err := s.GetCursor(ctx)
+	cursor, err := s.GetCursor(ctx, "mycontract")
 	if err != nil {
 		t.Fatalf("get cursor: %v", err)
 	}
@@ -474,11 +474,11 @@ func TestCursor(t *testing.T) {
 	}
 
 	// Set cursor.
-	if err := s.SetCursor(ctx, 12345); err != nil {
+	if err := s.SetCursor(ctx, "mycontract", 12345); err != nil {
 		t.Fatalf("set cursor: %v", err)
 	}
 
-	cursor, err = s.GetCursor(ctx)
+	cursor, err = s.GetCursor(ctx, "mycontract")
 	if err != nil {
 		t.Fatalf("get cursor after set: %v", err)
 	}
@@ -487,10 +487,39 @@ func TestCursor(t *testing.T) {
 	}
 
 	// Update cursor.
-	s.SetCursor(ctx, 99999)
-	cursor, _ = s.GetCursor(ctx)
+	s.SetCursor(ctx, "mycontract", 99999)
+	cursor, _ = s.GetCursor(ctx, "mycontract")
 	if cursor != 99999 {
 		t.Errorf("expected cursor 99999, got %d", cursor)
+	}
+}
+
+func TestPerContractCursors(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	s.SetCursor(ctx, "contract_a", 100)
+	s.SetCursor(ctx, "contract_b", 200)
+
+	cursorA, _ := s.GetCursor(ctx, "contract_a")
+	cursorB, _ := s.GetCursor(ctx, "contract_b")
+	if cursorA != 100 {
+		t.Errorf("expected contract_a cursor 100, got %d", cursorA)
+	}
+	if cursorB != 200 {
+		t.Errorf("expected contract_b cursor 200, got %d", cursorB)
+	}
+
+	// GetAllCursors.
+	all, err := s.GetAllCursors(ctx)
+	if err != nil {
+		t.Fatalf("get all cursors: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 cursors, got %d", len(all))
+	}
+	if all["contract_a"] != 100 || all["contract_b"] != 200 {
+		t.Errorf("unexpected cursors: %v", all)
 	}
 }
 

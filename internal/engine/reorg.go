@@ -40,13 +40,22 @@ func (e *Engine) handleReorg(ctx context.Context, reorg provider.ReorgNotificati
 		e.logger.Info("reverted block", "block", block, "ops", len(ops))
 	}
 
-	// Reset cursor to just before the reorg start.
+	// Reset per-contract cursors to just before the reorg start.
 	newCursor := reorg.StartBlock
 	if newCursor > 0 {
 		newCursor--
 	}
-	if err := e.store.SetCursor(ctx, newCursor); err != nil {
-		return fmt.Errorf("resetting cursor to %d: %w", newCursor, err)
+	for _, cs := range e.contracts {
+		cursor, err := e.store.GetCursor(ctx, cs.config.Name)
+		if err != nil {
+			return fmt.Errorf("getting cursor for %s: %w", cs.config.Name, err)
+		}
+		// Only reset if contract's cursor was at or past the reorg point.
+		if cursor >= reorg.StartBlock {
+			if err := e.store.SetCursor(ctx, cs.config.Name, newCursor); err != nil {
+				return fmt.Errorf("resetting cursor for %s to %d: %w", cs.config.Name, newCursor, err)
+			}
+		}
 	}
 
 	e.logger.Info("reorg handled", "new_cursor", newCursor)

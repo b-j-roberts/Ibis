@@ -69,6 +69,17 @@ func (s *PostgresStore) ensureMetaTable(ctx context.Context) error {
 			value TEXT NOT NULL
 		)
 	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS _ibis_cursors (
+			contract_name TEXT PRIMARY KEY,
+			last_block BIGINT NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)
+	`)
 	return err
 }
 
@@ -422,30 +433,45 @@ func (s *PostgresStore) GetAggregation(ctx context.Context, table string, _ stor
 	return result, nil
 }
 
-func (s *PostgresStore) GetCursor(ctx context.Context) (uint64, error) {
-	var val string
+func (s *PostgresStore) GetCursor(ctx context.Context, contract string) (uint64, error) {
+	var lastBlock int64
 	err := s.pool.QueryRow(ctx,
-		"SELECT value FROM _ibis_meta WHERE key = 'cursor'").Scan(&val)
+		"SELECT last_block FROM _ibis_cursors WHERE contract_name = $1", contract).Scan(&lastBlock)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("getting cursor: %w", err)
+		return 0, fmt.Errorf("getting cursor for %s: %w", contract, err)
 	}
-
-	var cursor uint64
-	if _, err := fmt.Sscanf(val, "%d", &cursor); err != nil {
-		return 0, fmt.Errorf("parsing cursor value %q: %w", val, err)
-	}
-	return cursor, nil
+	return uint64(lastBlock), nil
 }
 
-func (s *PostgresStore) SetCursor(ctx context.Context, blockNumber uint64) error {
+func (s *PostgresStore) SetCursor(ctx context.Context, contract string, blockNumber uint64) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO _ibis_meta (key, value) VALUES ('cursor', $1)
-		 ON CONFLICT (key) DO UPDATE SET value = $1`,
-		fmt.Sprintf("%d", blockNumber))
+		`INSERT INTO _ibis_cursors (contract_name, last_block, updated_at)
+		 VALUES ($1, $2, NOW())
+		 ON CONFLICT (contract_name) DO UPDATE SET last_block = $2, updated_at = NOW()`,
+		contract, int64(blockNumber))
 	return err
+}
+
+func (s *PostgresStore) GetAllCursors(ctx context.Context) (map[string]uint64, error) {
+	rows, err := s.pool.Query(ctx, "SELECT contract_name, last_block FROM _ibis_cursors")
+	if err != nil {
+		return nil, fmt.Errorf("getting all cursors: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]uint64)
+	for rows.Next() {
+		var name string
+		var lastBlock int64
+		if err := rows.Scan(&name, &lastBlock); err != nil {
+			return nil, fmt.Errorf("scanning cursor row: %w", err)
+		}
+		result[name] = uint64(lastBlock)
+	}
+	return result, rows.Err()
 }
 
 func (s *PostgresStore) CreateTable(ctx context.Context, sch *types.TableSchema) error {

@@ -72,7 +72,7 @@ func setupIntegrationServer(t *testing.T) (*httptest.Server, *memory.MemoryStore
 			}},
 	}
 	st.ApplyOperations(ctx, ops)
-	st.SetCursor(ctx, 1002)
+	st.SetCursor(ctx, "STRK", 1002)
 
 	bus := api.NewEventBus()
 	t.Cleanup(bus.Close)
