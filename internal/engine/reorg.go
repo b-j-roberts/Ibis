@@ -40,6 +40,9 @@ func (e *Engine) handleReorg(ctx context.Context, reorg provider.ReorgNotificati
 		e.logger.Info("reverted block", "block", block, "ops", len(ops))
 	}
 
+	// Deregister factory children whose deploy block is in the reverted range.
+	e.reorgFactoryChildren(ctx, reorg.StartBlock, reorg.EndBlock)
+
 	// Reset per-contract cursors to just before the reorg start.
 	newCursor := reorg.StartBlock
 	if newCursor > 0 {

@@ -57,6 +57,38 @@ type ContractConfig struct {
 	Events     []EventConfig `yaml:"events" json:"events"`
 	StartBlock uint64        `yaml:"start_block,omitempty" json:"start_block,omitempty"`
 	Dynamic    bool          `yaml:"-" json:"dynamic,omitempty"`
+
+	// Factory configuration for contracts that deploy child contracts.
+	Factory *FactoryConfig `yaml:"factory,omitempty" json:"factory,omitempty"`
+
+	// FactoryName is set on factory-spawned child contracts to track their parent.
+	FactoryName string `yaml:"-" json:"factory_name,omitempty"`
+
+	// FactoryMeta stores additional fields from the factory event (e.g., token0, token1).
+	FactoryMeta map[string]any `yaml:"-" json:"factory_meta,omitempty"`
+}
+
+// FactoryConfig defines factory contract indexing settings.
+type FactoryConfig struct {
+	// Event is the factory event name that signals a new child contract (e.g., "PairCreated").
+	Event string `yaml:"event" json:"event"`
+
+	// ChildAddressField is the field in the factory event containing the child's address.
+	ChildAddressField string `yaml:"child_address_field" json:"child_address_field"`
+
+	// ChildABI is the ABI source for child contracts ("fetch", file path, or contract name).
+	ChildABI string `yaml:"child_abi" json:"child_abi"`
+
+	// ChildEvents defines the event/table config template applied to each child contract.
+	ChildEvents []EventConfig `yaml:"child_events" json:"child_events"`
+
+	// SharedTables enables shared tables for all factory children (see task 3.11).
+	SharedTables bool `yaml:"shared_tables" json:"shared_tables"`
+
+	// ChildNameTemplate is an optional Go template for child naming.
+	// Supports {factory}, {short_address}, and factory event field names.
+	// Default: "{factory}_{short_address}"
+	ChildNameTemplate string `yaml:"child_name_template,omitempty" json:"child_name_template,omitempty"`
 }
 
 type EventConfig struct {

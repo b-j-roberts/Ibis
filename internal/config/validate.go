@@ -81,33 +81,14 @@ func Validate(cfg *Config) error {
 		if len(c.Events) == 0 {
 			return fieldError(prefix+".events", "at least one event is required")
 		}
-		for j, e := range c.Events {
-			ePrefix := fmt.Sprintf("%s.events[%d]", prefix, j)
-			if e.Name == "" {
-				return fieldError(ePrefix+".name", "required")
-			}
-			if !validTableTypes[e.Table.Type] {
-				return fieldError(ePrefix+".table.type", "must be one of: log, unique, aggregation")
-			}
-			if e.Table.Type == "unique" && e.Table.UniqueKey == "" {
-				return fieldError(ePrefix+".table.unique_key", "required when table type is unique")
-			}
-			if e.Table.Type == "aggregation" {
-				if len(e.Table.Aggregates) == 0 {
-					return fieldError(ePrefix+".table.aggregate", "required when table type is aggregation")
-				}
-				for k, a := range e.Table.Aggregates {
-					aPrefix := fmt.Sprintf("%s.table.aggregate[%d]", ePrefix, k)
-					if a.Column == "" {
-						return fieldError(aPrefix+".column", "required")
-					}
-					if !validAggOps[a.Operation] {
-						return fieldError(aPrefix+".operation", "must be one of: sum, count, avg")
-					}
-					if a.Field == "" {
-						return fieldError(aPrefix+".field", "required")
-					}
-				}
+		if err := validateEvents(c.Events, prefix); err != nil {
+			return err
+		}
+
+		// Validate factory config if present.
+		if c.Factory != nil {
+			if err := validateFactory(c.Factory, prefix); err != nil {
+				return err
 			}
 		}
 	}
@@ -128,6 +109,56 @@ func validateContractAddress(addr string) error {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 			return fmt.Errorf("invalid hex character: %c", c)
 		}
+	}
+	return nil
+}
+
+func validateEvents(events []EventConfig, prefix string) error {
+	for j, e := range events {
+		ePrefix := fmt.Sprintf("%s.events[%d]", prefix, j)
+		if e.Name == "" {
+			return fieldError(ePrefix+".name", "required")
+		}
+		if !validTableTypes[e.Table.Type] {
+			return fieldError(ePrefix+".table.type", "must be one of: log, unique, aggregation")
+		}
+		if e.Table.Type == "unique" && e.Table.UniqueKey == "" {
+			return fieldError(ePrefix+".table.unique_key", "required when table type is unique")
+		}
+		if e.Table.Type == "aggregation" {
+			if len(e.Table.Aggregates) == 0 {
+				return fieldError(ePrefix+".table.aggregate", "required when table type is aggregation")
+			}
+			for k, a := range e.Table.Aggregates {
+				aPrefix := fmt.Sprintf("%s.table.aggregate[%d]", ePrefix, k)
+				if a.Column == "" {
+					return fieldError(aPrefix+".column", "required")
+				}
+				if !validAggOps[a.Operation] {
+					return fieldError(aPrefix+".operation", "must be one of: sum, count, avg")
+				}
+				if a.Field == "" {
+					return fieldError(aPrefix+".field", "required")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateFactory(f *FactoryConfig, prefix string) error {
+	fPrefix := prefix + ".factory"
+	if f.Event == "" {
+		return fieldError(fPrefix+".event", "required")
+	}
+	if f.ChildAddressField == "" {
+		return fieldError(fPrefix+".child_address_field", "required")
+	}
+	if len(f.ChildEvents) == 0 {
+		return fieldError(fPrefix+".child_events", "at least one child event is required")
+	}
+	if err := validateEvents(f.ChildEvents, fPrefix); err != nil {
+		return err
 	}
 	return nil
 }

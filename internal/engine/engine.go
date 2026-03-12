@@ -27,6 +27,9 @@ type contractState struct {
 	abi      *abi.ABI
 	registry *abi.EventRegistry
 	schemas  map[string]*types.TableSchema // event name -> schema
+
+	// childABI caches the resolved ABI for factory children. Set on first child registration.
+	childABI *abi.ABI
 }
 
 // ContractStatus represents the current state of an indexed contract.
@@ -47,6 +50,9 @@ type ContractInfo struct {
 	CurrentBlock uint64         `json:"current_block"`
 	Status       ContractStatus `json:"status"`
 	Dynamic      bool           `json:"dynamic"`
+	FactoryName  string         `json:"factory_name,omitempty"`
+	FactoryMeta  map[string]any `json:"factory_meta,omitempty"`
+	IsFactory    bool           `json:"is_factory,omitempty"`
 }
 
 // Engine is the core indexing orchestrator. It receives events from the
@@ -180,6 +186,9 @@ func (e *Engine) Contracts(ctx context.Context) []ContractInfo {
 			CurrentBlock: cursor,
 			Status:       ContractStatusActive,
 			Dynamic:      cs.config.Dynamic,
+			FactoryName:  cs.config.FactoryName,
+			FactoryMeta:  cs.config.FactoryMeta,
+			IsFactory:    cs.config.Factory != nil,
 		})
 	}
 	return infos

@@ -97,6 +97,11 @@ func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error
 		"log_index", logIndex,
 	)
 
+	// Check if this is a factory creation event that spawns a child contract.
+	if cs.config.Factory != nil && eventDef.Name == cs.config.Factory.Event {
+		e.handleFactoryEvent(ctx, cs, decoded, raw)
+	}
+
 	return nil
 }
 

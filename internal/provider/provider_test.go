@@ -552,7 +552,7 @@ func TestSubscriberNoContracts(t *testing.T) {
 
 	err = sub.Start(ctx)
 	if err == nil {
-		t.Fatal("expected error for cancelled context")
+		t.Fatal("expected error for canceled context")
 	}
 }
 
