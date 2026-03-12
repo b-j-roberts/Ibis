@@ -24,7 +24,7 @@ func MetadataColumns() []types.Column {
 // BuildSchemas creates TableSchema definitions for a contract's configured events.
 // Handles wildcard ("*") expansion: all ABI events get the wildcard's table type,
 // with specific event entries overriding the default.
-func BuildSchemas(cc config.ContractConfig, contractABI *abi.ABI, registry *abi.EventRegistry) map[string]*types.TableSchema {
+func BuildSchemas(cc *config.ContractConfig, contractABI *abi.ABI, registry *abi.EventRegistry) map[string]*types.TableSchema {
 	schemas := make(map[string]*types.TableSchema)
 
 	// Build a lookup of explicitly configured events.

@@ -547,9 +547,12 @@ func TestSubscriberNoContracts(t *testing.T) {
 	events := make(chan RawEvent, 1)
 	sub := p.NewSubscriber(nil, events, nil)
 
-	err = sub.Start(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately so Start returns right away.
+
+	err = sub.Start(ctx)
 	if err == nil {
-		t.Fatal("expected error for empty contracts")
+		t.Fatal("expected error for cancelled context")
 	}
 }
 

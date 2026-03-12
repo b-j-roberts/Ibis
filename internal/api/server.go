@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/b-j-roberts/ibis/internal/config"
+	"github.com/b-j-roberts/ibis/internal/engine"
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/types"
 )
@@ -23,7 +25,9 @@ type Server struct {
 	contracts []config.ContractConfig
 	logger    *slog.Logger
 	server    *http.Server
-	bus       *EventBus // SSE event bus for real-time streaming
+	bus       *EventBus      // SSE event bus for real-time streaming
+	engine    *engine.Engine // Engine reference for dynamic contract management
+	mu        sync.RWMutex   // Protects schemas and contracts
 }
 
 // ServerConfig holds the dependencies needed to create an API server.
@@ -33,7 +37,8 @@ type ServerConfig struct {
 	APIConfig *config.APIConfig
 	Contracts []config.ContractConfig
 	Logger    *slog.Logger
-	EventBus  *EventBus // Optional: enables SSE streaming when set
+	EventBus  *EventBus      // Optional: enables SSE streaming when set
+	Engine    *engine.Engine // Optional: enables dynamic contract management
 }
 
 // New creates an API Server from the given configuration.
@@ -56,6 +61,7 @@ func New(cfg *ServerConfig) *Server {
 		contracts: cfg.Contracts,
 		logger:    logger.With("component", "api"),
 		bus:       cfg.EventBus,
+		engine:    cfg.Engine,
 	}
 }
 
@@ -102,6 +108,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 
+	// Admin endpoints for dynamic contract management.
+	mux.HandleFunc("POST /v1/admin/contracts", s.adminAuth(s.handleAdminRegisterContract))
+	mux.HandleFunc("DELETE /v1/admin/contracts/{name}", s.adminAuth(s.handleAdminDeregisterContract))
+	mux.HandleFunc("GET /v1/admin/contracts", s.adminAuth(s.handleAdminListContracts))
+	mux.HandleFunc("PUT /v1/admin/contracts/{name}", s.adminAuth(s.handleAdminUpdateContract))
+
 	// Event table endpoints (more specific paths registered first).
 	mux.HandleFunc("GET /v1/{contract}/{event}/stream", s.handleStream)
 	mux.HandleFunc("GET /v1/{contract}/{event}/latest", s.handleGetLatest)
@@ -114,7 +126,39 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 // lookupSchema finds a table schema by contract name and event name (case-insensitive).
 func (s *Server) lookupSchema(contract, event string) *types.TableSchema {
 	key := strings.ToLower(contract) + "/" + strings.ToLower(event)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.schemas[key]
+}
+
+// AddSchemas registers additional table schemas (for dynamically registered contracts).
+func (s *Server) AddSchemas(cc *config.ContractConfig, schemas []*types.TableSchema) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sch := range schemas {
+		key := strings.ToLower(sch.Contract) + "/" + strings.ToLower(sch.Event)
+		s.schemas[key] = sch
+	}
+	s.contracts = append(s.contracts, *cc)
+}
+
+// RemoveSchemas removes all schemas for a contract (for deregistered contracts).
+func (s *Server) RemoveSchemas(contractName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lower := strings.ToLower(contractName)
+	for key := range s.schemas {
+		if strings.HasPrefix(key, lower+"/") {
+			delete(s.schemas, key)
+		}
+	}
+	// Remove from contracts list.
+	for i, c := range s.contracts {
+		if c.Name == contractName {
+			s.contracts = append(s.contracts[:i], s.contracts[i+1:]...)
+			break
+		}
+	}
 }
 
 // ---- Middleware ----
@@ -144,8 +188,8 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

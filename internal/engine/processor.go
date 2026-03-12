@@ -16,7 +16,7 @@ import (
 // generate operation -> apply to store -> track in pending tracker.
 func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error {
 	// Find which contract this event belongs to.
-	cs := e.findContract(raw.ContractAddress)
+	cs := e.findContractByAddress(raw.ContractAddress)
 	if cs == nil {
 		return nil // Unknown contract, skip.
 	}
@@ -100,11 +100,14 @@ func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error
 	return nil
 }
 
-// findContract returns the contractState matching the given address, or nil.
-func (e *Engine) findContract(address *felt.Felt) *contractState {
+// findContractByAddress returns the contractState matching the given address, or nil.
+// Thread-safe: acquires read lock.
+func (e *Engine) findContractByAddress(address *felt.Felt) *contractState {
 	if address == nil {
 		return nil
 	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	for _, cs := range e.contracts {
 		if cs.address != nil && cs.address.Equal(address) {
 			return cs

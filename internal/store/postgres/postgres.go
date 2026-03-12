@@ -80,6 +80,18 @@ func (s *PostgresStore) ensureMetaTable(ctx context.Context) error {
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)
 	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS _ibis_dynamic_contracts (
+			name TEXT PRIMARY KEY,
+			config_json JSONB NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)
+	`)
 	return err
 }
 
@@ -604,6 +616,67 @@ func (s *PostgresStore) CountEvents(ctx context.Context, table string, filters [
 	var count int64
 	err := s.pool.QueryRow(ctx, query, args...).Scan(&count)
 	return count, err
+}
+
+func (s *PostgresStore) DropTable(ctx context.Context, tableName string) error {
+	delete(s.schemas, tableName)
+
+	// Drop the main table and aggregation companion.
+	_, err := s.pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", tableName))
+	if err != nil {
+		return fmt.Errorf("dropping table %s: %w", tableName, err)
+	}
+	_, err = s.pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s_agg CASCADE", tableName))
+	if err != nil {
+		return fmt.Errorf("dropping agg table for %s: %w", tableName, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) SaveDynamicContract(ctx context.Context, cc *config.ContractConfig) error {
+	data, err := json.Marshal(cc)
+	if err != nil {
+		return fmt.Errorf("marshaling contract config: %w", err)
+	}
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO _ibis_dynamic_contracts (name, config_json, updated_at)
+		 VALUES ($1, $2, NOW())
+		 ON CONFLICT (name) DO UPDATE SET config_json = $2, updated_at = NOW()`,
+		cc.Name, data)
+	return err
+}
+
+func (s *PostgresStore) GetDynamicContracts(ctx context.Context) ([]config.ContractConfig, error) {
+	rows, err := s.pool.Query(ctx, "SELECT config_json FROM _ibis_dynamic_contracts")
+	if err != nil {
+		return nil, fmt.Errorf("querying dynamic contracts: %w", err)
+	}
+	defer rows.Close()
+
+	var contracts []config.ContractConfig
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, fmt.Errorf("scanning dynamic contract: %w", err)
+		}
+		var cc config.ContractConfig
+		if err := json.Unmarshal(data, &cc); err != nil {
+			return nil, fmt.Errorf("unmarshaling contract config: %w", err)
+		}
+		cc.Dynamic = true
+		contracts = append(contracts, cc)
+	}
+	return contracts, rows.Err()
+}
+
+func (s *PostgresStore) DeleteDynamicContract(ctx context.Context, name string) error {
+	_, err := s.pool.Exec(ctx, "DELETE FROM _ibis_dynamic_contracts WHERE name = $1", name)
+	return err
+}
+
+func (s *PostgresStore) DeleteCursor(ctx context.Context, contract string) error {
+	_, err := s.pool.Exec(ctx, "DELETE FROM _ibis_cursors WHERE contract_name = $1", contract)
+	return err
 }
 
 func (s *PostgresStore) Close() error {

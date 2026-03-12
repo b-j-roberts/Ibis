@@ -233,7 +233,7 @@ func configureContract(ctx context.Context, p *prompter, resolver *config.ABIRes
 
 	// Fetch ABI from chain.
 	fmt.Fprintf(p.out, "Fetching ABI for %s from chain...\n", truncateAddress(address))
-	parsed, err := resolver.Resolve(ctx, cc)
+	parsed, err := resolver.Resolve(ctx, &cc)
 	if err != nil {
 		return cc, fmt.Errorf("fetching ABI: %w", err)
 	}

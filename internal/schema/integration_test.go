@@ -45,7 +45,7 @@ func TestIntegration_STRKContractSchemaGeneration(t *testing.T) {
 		ABI:     "fetch",
 	}
 
-	contractABI, err := resolver.Resolve(ctx, cc)
+	contractABI, err := resolver.Resolve(ctx, &cc)
 	if err != nil {
 		t.Fatalf("resolving ABI: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestIntegration_STRKContractSchemaGeneration(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(wildcardCC, contractABI, registry)
+	schemas := BuildSchemas(&wildcardCC, contractABI, registry)
 	t.Logf("Generated %d schemas from wildcard", len(schemas))
 
 	if len(schemas) != len(contractABI.Events) {
@@ -129,7 +129,7 @@ func TestIntegration_STRKContractSchemaGeneration(t *testing.T) {
 			},
 		}
 
-		overrideSchemas := BuildSchemas(overrideCC, contractABI, registry)
+		overrideSchemas := BuildSchemas(&overrideCC, contractABI, registry)
 
 		if overrideSchemas["Transfer"].TableType != types.TableTypeUnique {
 			t.Fatal("Transfer should be overridden to unique")

@@ -47,12 +47,12 @@ func NewABIResolver(fetcher ABIFetcher) *ABIResolver {
 func (r *ABIResolver) ResolveAll(ctx context.Context, contracts []ContractConfig) (map[string]*abi.ABI, error) {
 	result := make(map[string]*abi.ABI, len(contracts))
 
-	for _, c := range contracts {
-		parsed, err := r.Resolve(ctx, c)
+	for i := range contracts {
+		parsed, err := r.Resolve(ctx, &contracts[i])
 		if err != nil {
-			return nil, fmt.Errorf("contract %s (%s): %w", c.Name, c.Address, err)
+			return nil, fmt.Errorf("contract %s (%s): %w", contracts[i].Name, contracts[i].Address, err)
 		}
-		result[c.Address] = parsed
+		result[contracts[i].Address] = parsed
 	}
 
 	return result, nil
@@ -60,7 +60,7 @@ func (r *ABIResolver) ResolveAll(ctx context.Context, contracts []ContractConfig
 
 // Resolve resolves a single contract's ABI using the three-tier strategy.
 // Results are cached in memory for the session.
-func (r *ABIResolver) Resolve(ctx context.Context, contract ContractConfig) (*abi.ABI, error) {
+func (r *ABIResolver) Resolve(ctx context.Context, contract *ContractConfig) (*abi.ABI, error) {
 	// Check cache first.
 	r.mu.RLock()
 	if cached, ok := r.cache[contract.Address]; ok {
@@ -83,7 +83,7 @@ func (r *ABIResolver) Resolve(ctx context.Context, contract ContractConfig) (*ab
 }
 
 // resolve performs the actual three-tier resolution without caching.
-func (r *ABIResolver) resolve(ctx context.Context, contract ContractConfig) (*abi.ABI, error) {
+func (r *ABIResolver) resolve(ctx context.Context, contract *ContractConfig) (*abi.ABI, error) {
 	abiSpec := contract.ABI
 
 	// Tier 1: Explicit file path.

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/types"
 )
@@ -179,8 +180,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	contracts := make([]map[string]any, 0, len(s.contracts))
-	for _, c := range s.contracts {
+	s.mu.RLock()
+	contractsCopy := make([]config.ContractConfig, len(s.contracts))
+	copy(contractsCopy, s.contracts)
+	s.mu.RUnlock()
+
+	contracts := make([]map[string]any, 0, len(contractsCopy))
+	for _, c := range contractsCopy {
 		entry := map[string]any{
 			"name":          c.Name,
 			"address":       c.Address,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/types"
 )
@@ -28,18 +29,20 @@ type MemoryStore struct {
 	// schemas stores table schema definitions.
 	schemas map[string]types.TableSchema
 
-	cursors map[string]uint64
-	mu      sync.RWMutex
+	cursors          map[string]uint64
+	dynamicContracts map[string]config.ContractConfig
+	mu               sync.RWMutex
 }
 
 // New creates a new in-memory store.
 func New() *MemoryStore {
 	return &MemoryStore{
-		events:        make(map[string]map[string]types.IndexedEvent),
-		uniqueEntries: make(map[string]map[string]types.IndexedEvent),
-		aggregations:  make(map[string]map[string]float64),
-		schemas:       make(map[string]types.TableSchema),
-		cursors:       make(map[string]uint64),
+		events:           make(map[string]map[string]types.IndexedEvent),
+		uniqueEntries:    make(map[string]map[string]types.IndexedEvent),
+		aggregations:     make(map[string]map[string]float64),
+		schemas:          make(map[string]types.TableSchema),
+		cursors:          make(map[string]uint64),
+		dynamicContracts: make(map[string]config.ContractConfig),
 	}
 }
 
@@ -335,6 +338,47 @@ func (s *MemoryStore) CountEvents(_ context.Context, table string, filters []sto
 		}
 	}
 	return count, nil
+}
+
+func (s *MemoryStore) DropTable(_ context.Context, tableName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.events, tableName)
+	delete(s.uniqueEntries, tableName)
+	delete(s.aggregations, tableName)
+	delete(s.schemas, tableName)
+	return nil
+}
+
+func (s *MemoryStore) SaveDynamicContract(_ context.Context, cc *config.ContractConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dynamicContracts[cc.Name] = *cc
+	return nil
+}
+
+func (s *MemoryStore) GetDynamicContracts(_ context.Context) ([]config.ContractConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]config.ContractConfig, 0, len(s.dynamicContracts))
+	for _, cc := range s.dynamicContracts {
+		result = append(result, cc)
+	}
+	return result, nil
+}
+
+func (s *MemoryStore) DeleteDynamicContract(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.dynamicContracts, name)
+	return nil
+}
+
+func (s *MemoryStore) DeleteCursor(_ context.Context, contract string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cursors, contract)
+	return nil
 }
 
 func (s *MemoryStore) Close() error {

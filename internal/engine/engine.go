@@ -29,6 +29,26 @@ type contractState struct {
 	schemas  map[string]*types.TableSchema // event name -> schema
 }
 
+// ContractStatus represents the current state of an indexed contract.
+type ContractStatus string
+
+const (
+	ContractStatusActive      ContractStatus = "active"
+	ContractStatusSyncing     ContractStatus = "syncing"
+	ContractStatusError       ContractStatus = "error"
+	ContractStatusBackfilling ContractStatus = "backfilling"
+)
+
+// ContractInfo holds status information about a registered contract.
+type ContractInfo struct {
+	Name         string         `json:"name"`
+	Address      string         `json:"address"`
+	Events       int            `json:"events"`
+	CurrentBlock uint64         `json:"current_block"`
+	Status       ContractStatus `json:"status"`
+	Dynamic      bool           `json:"dynamic"`
+}
+
 // Engine is the core indexing orchestrator. It receives events from the
 // subscriber, decodes them via ABI, generates revert/add operation pairs,
 // writes to the store, and handles chain reorganizations.
@@ -38,8 +58,9 @@ type Engine struct {
 	provider *provider.StarknetProvider
 	logger   *slog.Logger
 
-	// Per-contract state built during setup.
+	// Per-contract state built during setup. Protected by mu.
 	contracts []*contractState
+	mu        sync.RWMutex
 
 	// Pending block operation tracker for reorg support.
 	pending *PendingTracker
@@ -62,6 +83,19 @@ type Engine struct {
 
 	// setupDone tracks whether Setup has been called.
 	setupDone bool
+
+	// subscriber is the active event subscriber, set during Run() for dynamic contract support.
+	subscriber *provider.EventSubscriber
+
+	// runCtx is the context from Run(), used for dynamic contract subscriptions.
+	runCtx context.Context
+
+	// onContractRegistered is called after a contract is dynamically registered,
+	// passing the new schemas. Used by the API server to add routes.
+	onContractRegistered func(cc *config.ContractConfig, schemas []*types.TableSchema)
+
+	// onContractDeregistered is called after a contract is deregistered.
+	onContractDeregistered func(name string)
 }
 
 // New creates an Engine with the given dependencies.
@@ -109,6 +143,8 @@ func (e *Engine) Setup(ctx context.Context) error {
 
 // Schemas returns all table schemas built during Setup.
 func (e *Engine) Schemas() []*types.TableSchema {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	var schemas []*types.TableSchema
 	for _, cs := range e.contracts {
 		for _, s := range cs.schemas {
@@ -116,6 +152,230 @@ func (e *Engine) Schemas() []*types.TableSchema {
 		}
 	}
 	return schemas
+}
+
+// SetOnContractRegistered sets a callback invoked after a contract is
+// dynamically registered. Passes the contract config and its schemas.
+func (e *Engine) SetOnContractRegistered(fn func(cc *config.ContractConfig, schemas []*types.TableSchema)) {
+	e.onContractRegistered = fn
+}
+
+// SetOnContractDeregistered sets a callback invoked after a contract is deregistered.
+func (e *Engine) SetOnContractDeregistered(fn func(name string)) {
+	e.onContractDeregistered = fn
+}
+
+// Contracts returns status information for all registered contracts.
+func (e *Engine) Contracts(ctx context.Context) []ContractInfo {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	infos := make([]ContractInfo, 0, len(e.contracts))
+	for _, cs := range e.contracts {
+		cursor, _ := e.store.GetCursor(ctx, cs.config.Name)
+		infos = append(infos, ContractInfo{
+			Name:         cs.config.Name,
+			Address:      cs.config.Address,
+			Events:       len(cs.config.Events),
+			CurrentBlock: cursor,
+			Status:       ContractStatusActive,
+			Dynamic:      cs.config.Dynamic,
+		})
+	}
+	return infos
+}
+
+// RegisterContract dynamically registers a new contract for indexing.
+// It resolves the ABI, builds schemas, creates tables, persists the config,
+// and spawns a subscription goroutine.
+func (e *Engine) RegisterContract(ctx context.Context, cc *config.ContractConfig) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Check for duplicate name.
+	for _, cs := range e.contracts {
+		if cs.config.Name == cc.Name {
+			return fmt.Errorf("contract %q already registered", cc.Name)
+		}
+	}
+
+	// Default ABI to fetch.
+	if cc.ABI == "" {
+		cc.ABI = "fetch"
+	}
+	cc.Dynamic = true
+
+	// Resolve ABI.
+	resolver := config.NewABIResolver(e.provider)
+	abis, err := resolver.ResolveAll(ctx, []config.ContractConfig{*cc})
+	if err != nil {
+		return fmt.Errorf("resolve ABI for %s: %w", cc.Name, err)
+	}
+
+	contractABI := abis[cc.Address]
+	if contractABI == nil {
+		return fmt.Errorf("no ABI resolved for contract %s (%s)", cc.Name, cc.Address)
+	}
+
+	registry := abi.NewEventRegistry(contractABI)
+	schemas := schema.BuildSchemas(cc, contractABI, registry)
+
+	// Parse contract address.
+	address, err := new(felt.Felt).SetString(cc.Address)
+	if err != nil {
+		return fmt.Errorf("parsing address for %s: %w", cc.Name, err)
+	}
+
+	// Create tables in store.
+	var schemaList []*types.TableSchema
+	for _, sch := range schemas {
+		if err := e.store.CreateTable(ctx, sch); err != nil {
+			return fmt.Errorf("create table %s: %w", sch.Name, err)
+		}
+		schemaList = append(schemaList, sch)
+		e.logger.Info("created table for dynamic contract",
+			"name", sch.Name,
+			"type", sch.TableType,
+		)
+	}
+
+	// Persist dynamic contract config.
+	if err := e.store.SaveDynamicContract(ctx, cc); err != nil {
+		return fmt.Errorf("persisting dynamic contract %s: %w", cc.Name, err)
+	}
+
+	cs := &contractState{
+		config:   *cc,
+		address:  address,
+		abi:      contractABI,
+		registry: registry,
+		schemas:  schemas,
+	}
+	e.contracts = append(e.contracts, cs)
+
+	// Spawn subscription if the engine is running.
+	if e.subscriber != nil && e.runCtx != nil {
+		startBlock := cc.StartBlock
+		if startBlock == 0 {
+			latest, err := e.provider.BlockNumber(ctx)
+			if err != nil {
+				e.logger.Warn("failed to get latest block for dynamic contract, using 0",
+					"contract", cc.Name, "error", err)
+			} else {
+				startBlock = latest
+			}
+		}
+
+		sub := provider.ContractSubscription{
+			Address:    address,
+			StartBlock: startBlock,
+		}
+
+		// Build key filters if no wildcard.
+		if !hasWildcardEvent(cc) {
+			var selectors []*felt.Felt
+			for _, ec := range cc.Events {
+				if ev := registry.MatchName(ec.Name); ev != nil {
+					selectors = append(selectors, ev.Selector)
+				}
+			}
+			if len(selectors) > 0 {
+				sub.Keys = [][]*felt.Felt{selectors}
+			}
+		}
+
+		e.subscriber.AddContract(e.runCtx, sub)
+		e.logger.Info("started subscription for dynamic contract",
+			"contract", cc.Name,
+			"start_block", startBlock,
+		)
+	}
+
+	// Notify API server.
+	if e.onContractRegistered != nil {
+		e.onContractRegistered(cc, schemaList)
+	}
+
+	return nil
+}
+
+// DeregisterContract removes a contract from indexing. If dropTables is true,
+// the contract's tables are also dropped from the store.
+func (e *Engine) DeregisterContract(ctx context.Context, name string, dropTables bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	var found *contractState
+	var idx int
+	for i, cs := range e.contracts {
+		if cs.config.Name == name {
+			found = cs
+			idx = i
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("contract %q not found", name)
+	}
+
+	// Stop subscription.
+	if e.subscriber != nil {
+		e.subscriber.RemoveContract(found.address.String())
+	}
+
+	// Drop tables if requested.
+	if dropTables {
+		for _, sch := range found.schemas {
+			if err := e.store.DropTable(ctx, sch.Name); err != nil {
+				e.logger.Error("failed to drop table", "table", sch.Name, "error", err)
+			}
+		}
+	}
+
+	// Delete cursor.
+	if err := e.store.DeleteCursor(ctx, name); err != nil {
+		e.logger.Error("failed to delete cursor", "contract", name, "error", err)
+	}
+
+	// Delete dynamic contract metadata.
+	if err := e.store.DeleteDynamicContract(ctx, name); err != nil {
+		e.logger.Error("failed to delete dynamic contract", "contract", name, "error", err)
+	}
+
+	// Remove from contracts slice.
+	e.contracts = append(e.contracts[:idx], e.contracts[idx+1:]...)
+
+	// Notify API server.
+	if e.onContractDeregistered != nil {
+		e.onContractDeregistered(name)
+	}
+
+	e.logger.Info("deregistered contract", "name", name, "drop_tables", dropTables)
+	return nil
+}
+
+// UpdateContract updates a registered contract's config (e.g., add new events).
+func (e *Engine) UpdateContract(ctx context.Context, name string, cc *config.ContractConfig) error {
+	// Deregister the old one (without dropping tables).
+	if err := e.DeregisterContract(ctx, name, false); err != nil {
+		return fmt.Errorf("deregistering old contract: %w", err)
+	}
+	// Register the new one.
+	cc.Name = name
+	return e.RegisterContract(ctx, cc)
+}
+
+// FindContract returns the contract config for a registered contract, or nil.
+func (e *Engine) FindContract(name string) *config.ContractConfig {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, cs := range e.contracts {
+		if cs.config.Name == name {
+			cc := cs.config
+			return &cc
+		}
+	}
+	return nil
 }
 
 // Run starts the indexing engine. It resolves ABIs, creates table schemas,
@@ -148,8 +408,13 @@ func (e *Engine) Run(ctx context.Context) error {
 	})
 	subscriber.SetReorgChan(e.reorgs)
 
+	// Store references for dynamic contract management.
+	e.subscriber = subscriber
+
 	subCtx, subCancel := context.WithCancel(ctx)
 	defer subCancel()
+
+	e.runCtx = subCtx
 
 	var subErr error
 	var wg sync.WaitGroup
@@ -180,22 +445,47 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 // setup resolves ABIs, builds event registries and table schemas, and creates
-// tables in the store.
+// tables in the store. Also loads persisted dynamic contracts.
 func (e *Engine) setup(ctx context.Context) error {
+	// Load static contracts from config.
+	allContracts := make([]config.ContractConfig, len(e.cfg.Contracts))
+	copy(allContracts, e.cfg.Contracts)
+
+	// Load dynamic contracts from store.
+	dynamicContracts, err := e.store.GetDynamicContracts(ctx)
+	if err != nil {
+		e.logger.Warn("failed to load dynamic contracts", "error", err)
+	} else {
+		// Merge: static config takes precedence on name conflicts.
+		staticNames := make(map[string]bool, len(e.cfg.Contracts))
+		for _, cc := range e.cfg.Contracts {
+			staticNames[cc.Name] = true
+		}
+		for _, dc := range dynamicContracts {
+			if !staticNames[dc.Name] {
+				dc.Dynamic = true
+				allContracts = append(allContracts, dc)
+				e.logger.Info("loaded dynamic contract from store", "name", dc.Name, "address", dc.Address)
+			} else {
+				e.logger.Info("skipping dynamic contract (overridden by static config)", "name", dc.Name)
+			}
+		}
+	}
+
 	resolver := config.NewABIResolver(e.provider)
-	abis, err := resolver.ResolveAll(ctx, e.cfg.Contracts)
+	abis, err := resolver.ResolveAll(ctx, allContracts)
 	if err != nil {
 		return fmt.Errorf("resolve ABIs: %w", err)
 	}
 
-	for _, cc := range e.cfg.Contracts {
+	for _, cc := range allContracts {
 		contractABI := abis[cc.Address]
 		if contractABI == nil {
 			return fmt.Errorf("no ABI resolved for contract %s (%s)", cc.Name, cc.Address)
 		}
 
 		registry := abi.NewEventRegistry(contractABI)
-		schemas := schema.BuildSchemas(cc, contractABI, registry)
+		schemas := schema.BuildSchemas(&cc, contractABI, registry)
 
 		// Parse contract address.
 		address, err := new(felt.Felt).SetString(cc.Address)
@@ -226,6 +516,17 @@ func (e *Engine) setup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// AllContracts returns a copy of all registered contract configs (for use by API server).
+func (e *Engine) AllContracts() []config.ContractConfig {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	result := make([]config.ContractConfig, len(e.contracts))
+	for i, cs := range e.contracts {
+		result[i] = cs.config
+	}
+	return result
 }
 
 // determineStartBlocks computes the starting block for each contract independently.
@@ -282,7 +583,7 @@ func (e *Engine) buildSubscriptions(startBlocks map[string]uint64) []provider.Co
 		}
 
 		// Only set key filters when there is no wildcard event configured.
-		if !hasWildcardEvent(cs.config) {
+		if !hasWildcardEvent(&cs.config) {
 			var selectors []*felt.Felt
 			for _, ec := range cs.config.Events {
 				if ev := cs.registry.MatchName(ec.Name); ev != nil {
@@ -300,7 +601,7 @@ func (e *Engine) buildSubscriptions(startBlocks map[string]uint64) []provider.Co
 }
 
 // hasWildcardEvent returns true if the contract config includes a "*" event entry.
-func hasWildcardEvent(cc config.ContractConfig) bool {
+func hasWildcardEvent(cc *config.ContractConfig) bool {
 	for _, ec := range cc.Events {
 		if ec.Name == "*" {
 			return true

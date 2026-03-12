@@ -18,6 +18,7 @@ import (
 	"github.com/b-j-roberts/ibis/internal/store/badger"
 	"github.com/b-j-roberts/ibis/internal/store/memory"
 	"github.com/b-j-roberts/ibis/internal/store/postgres"
+	"github.com/b-j-roberts/ibis/internal/types"
 )
 
 var runCmd = &cobra.Command{
@@ -82,15 +83,25 @@ var runCmd = &cobra.Command{
 			})
 		})
 
-		// Start API server in background.
+		// Start API server in background, with engine reference for dynamic contract management.
 		apiServer := api.New(&api.ServerConfig{
 			Store:     st,
 			Schemas:   eng.Schemas(),
 			APIConfig: &cfg.API,
-			Contracts: cfg.Contracts,
+			Contracts: eng.AllContracts(),
 			Logger:    logger,
 			EventBus:  bus,
+			Engine:    eng,
 		})
+
+		// Wire engine callbacks to API server for dynamic registration.
+		eng.SetOnContractRegistered(func(cc *config.ContractConfig, schemas []*types.TableSchema) {
+			apiServer.AddSchemas(cc, schemas)
+		})
+		eng.SetOnContractDeregistered(func(name string) {
+			apiServer.RemoveSchemas(name)
+		})
+
 		go func() {
 			if err := apiServer.Start(ctx); err != nil {
 				logger.Error("API server error", "error", err)

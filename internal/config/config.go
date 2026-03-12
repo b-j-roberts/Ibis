@@ -41,6 +41,7 @@ type APIConfig struct {
 	Host        string   `yaml:"host"`
 	Port        int      `yaml:"port"`
 	CORSOrigins []string `yaml:"cors_origins"`
+	AdminKey    string   `yaml:"admin_key"`
 }
 
 type IndexerConfig struct {
@@ -50,27 +51,29 @@ type IndexerConfig struct {
 }
 
 type ContractConfig struct {
-	Name    string        `yaml:"name"`
-	Address string        `yaml:"address"`
-	ABI     string        `yaml:"abi"`
-	Events  []EventConfig `yaml:"events"`
+	Name       string        `yaml:"name" json:"name"`
+	Address    string        `yaml:"address" json:"address"`
+	ABI        string        `yaml:"abi" json:"abi"`
+	Events     []EventConfig `yaml:"events" json:"events"`
+	StartBlock uint64        `yaml:"start_block,omitempty" json:"start_block,omitempty"`
+	Dynamic    bool          `yaml:"-" json:"dynamic,omitempty"`
 }
 
 type EventConfig struct {
-	Name  string      `yaml:"name"`
-	Table TableConfig `yaml:"table"`
+	Name  string      `yaml:"name" json:"name"`
+	Table TableConfig `yaml:"table" json:"table"`
 }
 
 type TableConfig struct {
-	Type       string            `yaml:"type"`
-	UniqueKey  string            `yaml:"unique_key"`
-	Aggregates []AggregateConfig `yaml:"aggregate"`
+	Type       string            `yaml:"type" json:"type"`
+	UniqueKey  string            `yaml:"unique_key" json:"unique_key,omitempty"`
+	Aggregates []AggregateConfig `yaml:"aggregate" json:"aggregate,omitempty"`
 }
 
 type AggregateConfig struct {
-	Column    string `yaml:"column"`
-	Operation string `yaml:"operation"`
-	Field     string `yaml:"field"`
+	Column    string `yaml:"column" json:"column"`
+	Operation string `yaml:"operation" json:"operation"`
+	Field     string `yaml:"field" json:"field"`
 }
 
 // envVarPattern matches ${VAR_NAME} for environment variable expansion.

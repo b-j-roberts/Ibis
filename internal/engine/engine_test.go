@@ -492,7 +492,7 @@ func TestBuildSchemas_ExplicitEvents(t *testing.T) {
 		},
 	}
 
-	schemas := schema.BuildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(&cc, parsedABI, registry)
 
 	if len(schemas) != 1 {
 		t.Fatalf("expected 1 schema, got %d", len(schemas))
@@ -523,7 +523,7 @@ func TestBuildSchemas_Wildcard(t *testing.T) {
 		},
 	}
 
-	schemas := schema.BuildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(&cc, parsedABI, registry)
 
 	if len(schemas) != 2 {
 		t.Fatalf("expected 2 schemas (wildcard), got %d", len(schemas))
@@ -555,7 +555,7 @@ func TestBuildSchemas_WildcardWithOverride(t *testing.T) {
 		},
 	}
 
-	schemas := schema.BuildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(&cc, parsedABI, registry)
 
 	if len(schemas) != 2 {
 		t.Fatalf("expected 2 schemas, got %d", len(schemas))
@@ -592,7 +592,7 @@ func TestBuildSchemas_MetadataColumns(t *testing.T) {
 		},
 	}
 
-	schemas := schema.BuildSchemas(cc, parsedABI, registry)
+	schemas := schema.BuildSchemas(&cc, parsedABI, registry)
 	schema := schemas["Transfer"]
 
 	// Check standard metadata columns are present.

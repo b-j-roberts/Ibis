@@ -396,8 +396,8 @@ func TestCORSHeaders(t *testing.T) {
 	}
 
 	methods := resp.Header.Get("Access-Control-Allow-Methods")
-	if methods != "GET, OPTIONS" {
-		t.Errorf("expected methods 'GET, OPTIONS', got %q", methods)
+	if methods != "GET, POST, PUT, DELETE, OPTIONS" {
+		t.Errorf("expected methods 'GET, POST, PUT, DELETE, OPTIONS', got %q", methods)
 	}
 }
 

@@ -93,6 +93,10 @@ type EventSubscriber struct {
 
 	// dialWSS creates a WSS session. Override in tests.
 	dialWSS wssDialer
+
+	// Per-contract cancel functions for dynamic management.
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
 }
 
 // NewSubscriber creates an EventSubscriber for the given contracts.
@@ -110,6 +114,7 @@ func (p *StarknetProvider) NewSubscriber(contracts []ContractSubscription, event
 		logger:         p.logger.With("component", "subscriber"),
 		blocksPerQuery: blocksPerQuery,
 		dialWSS:        defaultWSSDialer,
+		cancels:        make(map[string]context.CancelFunc),
 	}
 }
 
@@ -122,7 +127,9 @@ func (s *EventSubscriber) SetReorgChan(ch chan<- ReorgNotification) {
 // Each contract gets its own goroutine with independent WSS/polling lifecycle.
 func (s *EventSubscriber) Start(ctx context.Context) error {
 	if len(s.contracts) == 0 {
-		return fmt.Errorf("no contracts to subscribe to")
+		// No initial contracts is valid when using dynamic registration.
+		<-ctx.Done()
+		return ctx.Err()
 	}
 
 	var wg sync.WaitGroup
@@ -130,12 +137,18 @@ func (s *EventSubscriber) Start(ctx context.Context) error {
 
 	for _, contract := range s.contracts {
 		wg.Add(1)
-		go func(c ContractSubscription) {
+		contractCtx, cancel := context.WithCancel(ctx)
+		addrHex := contract.Address.String()
+		s.mu.Lock()
+		s.cancels[addrHex] = cancel
+		s.mu.Unlock()
+
+		go func(c ContractSubscription, cCtx context.Context) {
 			defer wg.Done()
-			if err := s.subscribeContract(ctx, c); err != nil && ctx.Err() == nil {
+			if err := s.subscribeContract(cCtx, c); err != nil && ctx.Err() == nil {
 				errCh <- fmt.Errorf("contract %s: %w", c.Address, err)
 			}
-		}(contract)
+		}(contract, contractCtx)
 	}
 
 	wg.Wait()
@@ -145,6 +158,40 @@ func (s *EventSubscriber) Start(ctx context.Context) error {
 		return err
 	default:
 		return ctx.Err()
+	}
+}
+
+// AddContract dynamically adds a contract subscription to a running subscriber.
+// The new subscription runs in its own goroutine with independent lifecycle.
+func (s *EventSubscriber) AddContract(ctx context.Context, sub ContractSubscription) {
+	contractCtx, cancel := context.WithCancel(ctx)
+	addrHex := sub.Address.String()
+
+	s.mu.Lock()
+	s.cancels[addrHex] = cancel
+	s.mu.Unlock()
+
+	go func() {
+		if err := s.subscribeContract(contractCtx, sub); err != nil && ctx.Err() == nil {
+			s.logger.Error("dynamic contract subscription failed",
+				"contract", sub.Address,
+				"error", err,
+			)
+		}
+	}()
+}
+
+// RemoveContract stops the subscription for a contract by its address hex string.
+func (s *EventSubscriber) RemoveContract(addressHex string) {
+	s.mu.Lock()
+	cancel, ok := s.cancels[addressHex]
+	if ok {
+		delete(s.cancels, addressHex)
+	}
+	s.mu.Unlock()
+
+	if ok {
+		cancel()
 	}
 }
 

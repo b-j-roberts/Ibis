@@ -12,6 +12,7 @@ import (
 
 	badgerdb "github.com/dgraph-io/badger/v4"
 
+	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/store"
 	"github.com/b-j-roberts/ibis/internal/types"
 )
@@ -25,12 +26,13 @@ import (
 //	meta:cursor:{contract}                   → per-contract last processed block number
 //	schema:{table}                           → table schema definition
 const (
-	prefixEvt    = "evt:"
-	prefixRev    = "rev:"
-	prefixUnq    = "unq:"
-	prefixAgg    = "agg:"
-	prefixSchema = "schema:"
-	prefixCursor = "meta:cursor:"
+	prefixEvt      = "evt:"
+	prefixRev      = "rev:"
+	prefixUnq      = "unq:"
+	prefixAgg      = "agg:"
+	prefixSchema   = "schema:"
+	prefixCursor   = "meta:cursor:"
+	prefixContract = "meta:contracts:"
 )
 
 // BadgerStore implements store.Store using BadgerDB v4.
@@ -554,6 +556,101 @@ func (s *BadgerStore) CountEvents(_ context.Context, table string, filters []sto
 	})
 
 	return count, err
+}
+
+func (s *BadgerStore) DropTable(_ context.Context, tableName string) error {
+	s.mu.Lock()
+	delete(s.schemas, tableName)
+	s.mu.Unlock()
+
+	// Delete all keys for this table across all prefixes.
+	prefixes := [][]byte{
+		evtPrefix(tableName),
+		revPrefix(tableName),
+		[]byte(fmt.Sprintf("%s%s:", prefixUnq, tableName)),
+		aggKey(tableName),
+		schemaKey(tableName),
+	}
+
+	for _, prefix := range prefixes {
+		if err := s.deleteByPrefix(prefix); err != nil {
+			return fmt.Errorf("dropping table %s: %w", tableName, err)
+		}
+	}
+	return nil
+}
+
+func (s *BadgerStore) deleteByPrefix(prefix []byte) error {
+	return s.db.Update(func(txn *badgerdb.Txn) error {
+		opts := badgerdb.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		var keys [][]byte
+		for it.Seek(prefix); it.Valid(); it.Next() {
+			key := make([]byte, len(it.Item().Key()))
+			copy(key, it.Item().Key())
+			keys = append(keys, key)
+		}
+		for _, key := range keys {
+			if err := txn.Delete(key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *BadgerStore) SaveDynamicContract(_ context.Context, cc *config.ContractConfig) error {
+	data, err := json.Marshal(cc)
+	if err != nil {
+		return fmt.Errorf("marshaling contract config: %w", err)
+	}
+	key := []byte(prefixContract + cc.Name)
+	return s.db.Update(func(txn *badgerdb.Txn) error {
+		return txn.Set(key, data)
+	})
+}
+
+func (s *BadgerStore) GetDynamicContracts(_ context.Context) ([]config.ContractConfig, error) {
+	var contracts []config.ContractConfig
+	prefix := []byte(prefixContract)
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		opts := badgerdb.DefaultIteratorOptions
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefix); it.Valid(); it.Next() {
+			item := it.Item()
+			var cc config.ContractConfig
+			if err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &cc)
+			}); err != nil {
+				return err
+			}
+			cc.Dynamic = true
+			contracts = append(contracts, cc)
+		}
+		return nil
+	})
+	return contracts, err
+}
+
+func (s *BadgerStore) DeleteDynamicContract(_ context.Context, name string) error {
+	key := []byte(prefixContract + name)
+	return s.db.Update(func(txn *badgerdb.Txn) error {
+		return txn.Delete(key)
+	})
+}
+
+func (s *BadgerStore) DeleteCursor(_ context.Context, contract string) error {
+	key := []byte(prefixCursor + contract)
+	return s.db.Update(func(txn *badgerdb.Txn) error {
+		return txn.Delete(key)
+	})
 }
 
 func (s *BadgerStore) Close() error {

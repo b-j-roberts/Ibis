@@ -63,7 +63,7 @@ func TestResolveFromExplicitPath(t *testing.T) {
 		ABI:     abiPath,
 	}
 
-	parsed, err := resolver.Resolve(context.Background(), contract)
+	parsed, err := resolver.Resolve(context.Background(), &contract)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestResolveFromExplicitPath_RelativePath(t *testing.T) {
 		ABI:     abiPath, // absolute but ends in .json
 	}
 
-	parsed, err := resolver.Resolve(context.Background(), contract)
+	parsed, err := resolver.Resolve(context.Background(), &contract)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestResolveFromExplicitPath_NotFound(t *testing.T) {
 		ABI:     "./nonexistent/path.json",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -130,7 +130,7 @@ func TestResolveFromChain_SierraClass(t *testing.T) {
 		ABI:     "fetch",
 	}
 
-	parsed, err := resolver.Resolve(context.Background(), contract)
+	parsed, err := resolver.Resolve(context.Background(), &contract)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestResolveFromChain_NoProvider(t *testing.T) {
 		ABI:     "fetch",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error when fetcher is nil")
 	}
@@ -172,7 +172,7 @@ func TestResolveFromChain_RPCError(t *testing.T) {
 		ABI:     "fetch",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error on RPC failure")
 	}
@@ -193,7 +193,7 @@ func TestResolveFromChain_EmptyABI(t *testing.T) {
 		ABI:     "fetch",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error for empty ABI")
 	}
@@ -213,7 +213,7 @@ func TestResolveFromChain_DeprecatedClassNilABI(t *testing.T) {
 		ABI:     "fetch",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error for deprecated class with nil ABI")
 	}
@@ -236,7 +236,7 @@ func TestCaching(t *testing.T) {
 	}
 
 	// First call.
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestCaching(t *testing.T) {
 	fetcher.called = false
 
 	// Second call should hit cache.
-	parsed, err := resolver.Resolve(context.Background(), contract)
+	parsed, err := resolver.Resolve(context.Background(), &contract)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestLocalDiscovery(t *testing.T) {
 		ABI:     "MyToken", // contract name triggers local discovery
 	}
 
-	parsed, err := resolver.Resolve(context.Background(), contract)
+	parsed, err := resolver.Resolve(context.Background(), &contract)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestLocalDiscovery_NotFound(t *testing.T) {
 		ABI:     "MissingContract",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error for missing local ABI")
 	}
@@ -382,7 +382,7 @@ func TestLocalDiscovery_MultipleMatches(t *testing.T) {
 		ABI:     "MyToken",
 	}
 
-	_, err := resolver.Resolve(context.Background(), contract)
+	_, err := resolver.Resolve(context.Background(), &contract)
 	if err == nil {
 		t.Fatal("expected error for multiple matching ABI files")
 	}

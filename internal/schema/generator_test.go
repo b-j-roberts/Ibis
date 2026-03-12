@@ -51,7 +51,7 @@ func TestBuildSchemas_ExplicitEvents(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry)
 
 	if len(schemas) != 1 {
 		t.Fatalf("expected 1 schema, got %d", len(schemas))
@@ -82,7 +82,7 @@ func TestBuildSchemas_Wildcard(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef, mintDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef, mintDef}}, registry)
 
 	if len(schemas) != 3 {
 		t.Fatalf("expected 3 schemas (wildcard), got %d", len(schemas))
@@ -111,7 +111,7 @@ func TestBuildSchemas_WildcardWithOverride(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry)
 
 	if len(schemas) != 2 {
 		t.Fatalf("expected 2 schemas, got %d", len(schemas))
@@ -151,7 +151,7 @@ func TestBuildSchemas_WildcardWithAggregationOverride(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(cc, &abi.ABI{Events: []*abi.EventDef{transferDef, volumeDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, volumeDef}}, registry)
 
 	if schemas["VolumeUpdate"].TableType != types.TableTypeAggregation {
 		t.Fatal("expected VolumeUpdate to be aggregation type")
@@ -182,7 +182,7 @@ func TestBuildSchemas_NoEventsConfigured(t *testing.T) {
 		Events:  []config.EventConfig{},
 	}
 
-	schemas := BuildSchemas(cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry)
 
 	if len(schemas) != 0 {
 		t.Fatalf("expected 0 schemas with no events configured, got %d", len(schemas))
@@ -201,7 +201,7 @@ func TestBuildSchemas_NonexistentEventIgnored(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry)
 
 	if len(schemas) != 0 {
 		t.Fatalf("expected 0 schemas for nonexistent event, got %d", len(schemas))
@@ -622,7 +622,7 @@ func TestFullPipeline_WildcardWithMixedTypes(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(cc, contractABI, registry)
+	schemas := BuildSchemas(&cc, contractABI, registry)
 
 	// All 4 events should have schemas.
 	if len(schemas) != 4 {

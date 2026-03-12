@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/b-j-roberts/ibis/internal/config"
 	"github.com/b-j-roberts/ibis/internal/types"
 )
 
@@ -46,6 +47,21 @@ type Store interface {
 
 	// CountEvents returns the total number of events matching the filters.
 	CountEvents(ctx context.Context, table string, filters []Filter) (int64, error)
+
+	// DropTable removes a table and all its data. Used when deregistering contracts.
+	DropTable(ctx context.Context, tableName string) error
+
+	// SaveDynamicContract persists a dynamically registered contract config.
+	SaveDynamicContract(ctx context.Context, cc *config.ContractConfig) error
+
+	// GetDynamicContracts returns all dynamically registered contract configs.
+	GetDynamicContracts(ctx context.Context) ([]config.ContractConfig, error)
+
+	// DeleteDynamicContract removes a persisted dynamic contract config.
+	DeleteDynamicContract(ctx context.Context, name string) error
+
+	// DeleteCursor removes the cursor for the given contract.
+	DeleteCursor(ctx context.Context, contract string) error
 
 	// Close releases all resources held by the store.
 	Close() error
