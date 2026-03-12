@@ -402,23 +402,260 @@
 - Binaries come from the GitHub release workflow (goreleaser)
 - Plugin should verify checksums on download
 
-### 3.4 Multiple Contract Support Enhancements
+### 3.4 Contract Groups & Namespacing
 
-**Description**: Improve the multi-contract experience with contract grouping, cross-contract queries, and contract discovery.
+**Description**: Group related contracts under a logical namespace in config. Groups are reflected in API URL prefixes, enabling cleaner organization for multi-contract deployments (e.g., grouping all DEX contracts under a `dex` namespace). This is a foundational organizational primitive that later tasks (cross-contract queries, factory APIs) build on.
 
 **Requirements**:
-- [ ] Contract groups in config: group related contracts under a namespace
-- [ ] Cross-contract queries: query events across multiple contracts in a single request
-- [ ] Contract discovery: watch for new contract deployments matching a class hash
-- [ ] Proxy contract support: follow proxy patterns to resolve implementation ABIs
-- [ ] Dynamic contract registration: add new contracts without restarting the indexer
+- [ ] Add optional `group` field to `ContractConfig` in config struct
+- [ ] Validate group names (lowercase alphanumeric + hyphens, no special characters)
+- [ ] API URL prefix includes group when present: `/v1/{group}/{contract}/{event}`
+- [ ] Ungrouped contracts retain current URL pattern: `/v1/{contract}/{event}`
+- [ ] Status endpoint (`/v1/status`) shows contracts organized by group
+- [ ] Table names optionally prefixed with group: `{group}_{contract}_{event}`
+- [ ] Config validation: no duplicate contract names within the same group
+- [ ] SSE streaming respects group prefix: `/v1/{group}/{contract}/{event}/stream`
 
 **Implementation Notes**:
-- Contract groups map to API URL prefixes (`/v1/{group}/{contract}/{event}`)
-- Cross-contract queries need a unified table view or UNION query support
-- Proxy detection: check for `__implementation` storage slot or known proxy patterns
+- Config shape: `contracts: [{ name: MyDEX, group: dex, address: "0x...", ... }]`
+- The group field is optional — omitting it preserves backward compatibility with existing configs
+- API route registration: if group is set, register `GET /v1/{group}/{contract}/{event}`, otherwise `GET /v1/{contract}/{event}`
+- Schema generator: when group is present, `BuildTableSchema` uses `{group}_{contract}_{event}` as table name
+- Reserve the group name `_all` (used in 3.5 for cross-contract queries)
 
-### 3.5 Monitoring and Observability
+### 3.5 Cross-Contract Queries
+
+**Description**: Enable querying events across multiple contracts in a single API request. Supports both group-wide queries (all contracts in a group) and explicit multi-contract queries, returning unified results with contract attribution.
+
+**Requirements**:
+- [ ] Group-level query endpoint: `GET /v1/{group}/_all/{event}` returns events of that type from all contracts in the group
+- [ ] Multi-contract query parameter: `?contracts=ContractA,ContractB` on any event endpoint
+- [ ] Results include `contract_name` and `contract_address` fields for disambiguation
+- [ ] Pagination, ordering, and filtering work across the unified result set
+- [ ] Count endpoint works across contracts: `GET /v1/{group}/_all/{event}/count`
+- [ ] SSE streaming across contracts: `GET /v1/{group}/_all/{event}/stream`
+- [ ] `ibis query` CLI supports `--contracts` flag for cross-contract queries
+
+**Implementation Notes**:
+- For Postgres: use `UNION ALL` across contract tables with an added `contract_name` column, apply `ORDER BY` and `LIMIT` on the union
+- For BadgerDB: merge-sort results from multiple prefix scans using a min-heap
+- For in-memory: concatenate and re-sort
+- The `_all` path segment is a reserved name — validate that no contract is named `_all` in config validation
+- Cross-contract queries on different table types (log vs unique) should return an error — only same-type tables can be unioned
+- If shared tables (3.11) are in use, cross-contract queries become simple `WHERE` clauses instead of unions
+
+### 3.6 Proxy Contract Support
+
+**Description**: Detect common Starknet proxy patterns and automatically resolve implementation ABIs. When a contract is a proxy, ibis fetches the implementation's ABI instead of the proxy's minimal ABI.
+
+**Requirements**:
+- [ ] Auto-detect proxies when `abi: fetch` is used: if the fetched ABI has very few events and contains upgrade-related functions, attempt implementation resolution
+- [ ] Use `starknet_getClassHashAt(address)` to get the current class hash, then `starknet_getClass(class_hash)` to fetch the full implementation ABI
+- [ ] Support explicit `implementation` field in contract config for manual proxy resolution: `implementation: "0x..."` (class hash or contract address)
+- [ ] Config option to disable auto-proxy-detection: `proxy: false` on a contract entry
+- [ ] Log a warning when proxy detection is used, noting that the implementation can change at runtime
+- [ ] If proxy resolution fails, fall back to the proxy's own ABI with a warning
+- [ ] Unit tests with mock proxy ABIs (minimal proxy ABI + full implementation ABI)
+
+**Implementation Notes**:
+- `starknet_getClassHashAt(address)` returns the current class hash for any contract — this is the simplest approach, no storage slot guessing needed
+- Proxy detection heuristic: if the fetched ABI has fewer than 3 event definitions and contains `upgrade` or `set_implementation` functions, it's likely a proxy
+- For UUPS-style proxies (OpenZeppelin Upgradeable), the class hash at the proxy address IS the implementation's class hash
+- Document that users should prefer explicit ABI paths for proxies with known implementations
+- Proxy resolution runs once at startup; for runtime upgrades, see task 3.13 (Contract Upgrade Tracking)
+
+### 3.7 Dynamic Contract Registration
+
+**Description**: Add and remove indexed contracts at runtime via the HTTP API, without restarting the indexer. This is the foundation for factory auto-registration (3.10) and class hash discovery (3.9).
+
+**Requirements**:
+- [ ] `POST /v1/admin/contracts` — register a new contract with full config (name, address, ABI source, events, group)
+- [ ] `DELETE /v1/admin/contracts/{name}` — deregister a contract (stops indexing, optionally drops tables via `?drop_tables=true`)
+- [ ] `GET /v1/admin/contracts` — list all registered contracts with status (active, syncing, error, backfilling)
+- [ ] `PUT /v1/admin/contracts/{name}` — update contract config (e.g., add new events to index)
+- [ ] New contracts start indexing from a specified `start_block` (or latest if omitted)
+- [ ] Engine hot-adds a new WSS subscription for the contract without disrupting existing subscriptions
+- [ ] Persist dynamic registrations in the database so they survive restarts
+- [ ] Admin endpoints protected by optional API key (`api.admin_key` in config)
+- [ ] API routes for new contract's events are registered dynamically
+- [ ] Integration tests for full add/remove/restart lifecycle
+
+**Implementation Notes**:
+- The engine needs a thread-safe `RegisterContract(config)` method that: resolves ABI, builds schemas, creates tables, spawns subscription goroutine, registers API routes
+- Use a channel or mutex-protected method that the API handler calls to signal the engine
+- For WSS: spawn a new subscription goroutine for the new contract via the existing `subscribeContract` pattern
+- For persistence: store dynamic contracts in a `_ibis_contracts` metadata table (Postgres) or `meta:contracts:{name}` prefix (Badger)
+- On restart: load both static (config file) and dynamic (DB) contracts; static config takes precedence on conflicts
+- Depends on per-contract cursors (3.8) — new contracts need their own cursor, not the global one
+
+### 3.8 Per-Contract Cursors & Targeted Backfill
+
+**Description**: Replace the single global cursor with per-contract cursor tracking. Each contract independently tracks its last processed block, enabling new contracts to backfill from their deployment block without re-indexing existing contracts. This is a prerequisite for dynamic registration (3.7), factory indexing (3.10), and class hash discovery (3.9).
+
+**Requirements**:
+- [ ] Store per-contract cursor: `GetCursor(ctx, contract)` and `SetCursor(ctx, contract, blockNumber)`
+- [ ] Maintain a derived global cursor (`min(all contract cursors)`) for overall sync status reporting
+- [ ] On startup, each contract resumes from `max(its_persisted_cursor + 1, config_start_block)`
+- [ ] New dynamically-added contracts start from their specified start block regardless of other contracts' positions
+- [ ] Backfill runs per-contract: each contract can independently catch up via `starknet_getEvents`
+- [ ] Status endpoint shows per-contract sync progress: current block, target block, sync percentage, status
+- [ ] Migration path: existing single-cursor deployments auto-migrate to per-contract cursors on upgrade (assign current global cursor to all existing contracts)
+- [ ] Unit tests for migration and concurrent multi-cursor updates
+
+**Implementation Notes**:
+- Postgres: create `_ibis_cursors` table with `(contract_name TEXT PRIMARY KEY, last_block BIGINT, updated_at TIMESTAMP)`
+- BadgerDB: use `meta:cursor:{contract_name}` keys instead of single `meta:cursor`
+- In-memory: `map[string]uint64` for cursors
+- The global cursor becomes `min(all contract cursors)` — used for `/v1/status` overall block height
+- Engine startup sequence changes: instead of one `determineStartingBlock`, each contract calls it independently
+- Per-contract backfill can run concurrently (one goroutine per contract doing `starknet_getEvents` catchup), with rate limiting to avoid overwhelming the RPC node
+- Backward compatibility: if no per-contract cursors exist, fall back to reading the legacy `meta:cursor` key
+
+### 3.9 Contract Discovery by Class Hash
+
+**Description**: Watch for new contract deployments matching a specified class hash and automatically register them for indexing. Monitors the Universal Deployer Contract (UDC) for `ContractDeployed` events filtered by class hash. This enables indexing all instances of a specific contract type across the network.
+
+**Requirements**:
+- [ ] Config section for class hash watches:
+  ```yaml
+  discover:
+    - class_hash: "0xabc123..."
+      group: my_tokens          # optional: group discovered contracts
+      abi: fetch                 # or explicit path
+      events:
+        - name: "*"
+          table:
+            type: log
+  ```
+- [ ] Subscribe to UDC events (`ContractDeployed`) and filter by `classHash` field in the event data
+- [ ] Extract deployed contract address from UDC event and auto-register for indexing via dynamic registration (3.7)
+- [ ] Apply the configured ABI and event template to all discovered contracts
+- [ ] Backfill: on startup, scan historical UDC events for matching class hashes to discover existing contracts
+- [ ] Discovered contracts tracked with deployment block for targeted backfill (3.8)
+- [ ] Reorg safety: if a `ContractDeployed` event is reverted, deregister the child and revert its indexed events
+- [ ] Auto-generate contract names: `{class_hash_short}_{address_short}` or configurable naming template
+
+**Implementation Notes**:
+- UDC address on mainnet/Sepolia: `0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b050221`
+- UDC event: `ContractDeployed(address: ContractAddress, deployer: ContractAddress, unique: bool, classHash: ClassHash, calldata: Span<felt252>, salt: felt252)`
+- Filter UDC subscription by `keys[0]` = `sn_keccak("ContractDeployed")` — then match `classHash` field in decoded event data
+- This is a network-level discovery mechanism (vs. factory in 3.10 which is contract-specific)
+- All discovered contracts share the same ABI (same class hash = same code)
+- Depends on: dynamic registration (3.7) and per-contract cursors (3.8)
+- Not all contracts are deployed via UDC — some use `deploy_syscall` directly from factory contracts (covered by 3.10)
+
+### 3.10 Factory Contract Indexing
+
+**Description**: Support factory contract patterns (JediSwap, 10kSwap, etc.) where a factory contract deploys child contracts and emits events like `PairCreated` containing the child's address. The indexer watches factory events and auto-registers child contracts for indexing using the factory's child configuration template.
+
+**Requirements**:
+- [ ] Config section for factory contracts:
+  ```yaml
+  contracts:
+    - name: JediSwapFactory
+      address: "0x..."
+      abi: fetch
+      factory:
+        event: PairCreated              # factory event that signals a new child
+        child_address_field: pair       # field in the event containing child address
+        child_abi: fetch                # ABI source for children (or explicit path)
+        child_events:                   # event/table config template for children
+          - name: "*"
+            table:
+              type: log
+        shared_tables: true             # children share tables (see 3.11)
+  ```
+- [ ] When a factory event fires, extract the child address from the specified field
+- [ ] Auto-register the child contract using the factory's child config template (ABI, events, table types)
+- [ ] Backfill: on startup, replay historical factory events to discover all existing children before starting live indexing
+- [ ] Start indexing each child from its deployment block (the block where the factory event occurred)
+- [ ] Handle constructor events: ensure child events from the same block as the factory event are captured
+- [ ] Reorg safety: if a factory event is reverted, deregister the child and revert all its indexed events
+- [ ] Track factory-child relationships in metadata for API and status reporting
+- [ ] Support multiple factory contracts in one config
+- [ ] Store additional factory event fields as child metadata (e.g., `token0`, `token1` from `PairCreated`)
+
+**Implementation Notes**:
+- Factory indexing is a two-phase startup: (1) scan factory for all historical child-creation events, (2) backfill each child from its deployment block
+- The factory contract itself is also indexed — its events like `PairCreated` go into a normal log table
+- Child contracts all share the same ABI (same class hash deployed by `deploy_syscall`)
+- Child naming: auto-generate names like `{factory_name}_{short_address}` or use a template: `child_name_template: "{factory}_{token0}_{token1}"` referencing factory event fields
+- `starknet_getEvents` only accepts one address per call — for N children, need N WSS subscriptions. For large factories (500+ children), consider subscription batching and backfill rate limiting
+- The factory event handler runs in the engine's event processing pipeline, calling the dynamic registration capability (3.7) when a new child is detected
+- Depends on: dynamic registration (3.7), per-contract cursors (3.8)
+- Starknet factory examples: JediSwap V1 (`PairCreated` with `pair` field), JediSwap V2 (`PoolCreated` with `pool` field), 10kSwap (`PairCreated` with `pair` field)
+
+### 3.11 Shared Tables for Same-ABI Contracts
+
+**Description**: Instead of creating one table per contract per event (which causes schema explosion with 500+ factory children), allow contracts sharing the same ABI to write events into shared tables with a `contract_address` discriminator column. A JediSwap V1 factory with 500 pairs creates ~5-10 shared tables instead of ~2500-5000 per-contract tables.
+
+**Requirements**:
+- [ ] Config option on factory: `shared_tables: true` (shown in 3.10 config example)
+- [ ] Config option on contract groups: `shared_tables: true` for manually-grouped same-ABI contracts
+- [ ] When shared tables are enabled, all contracts in the factory/group write to one table per event type
+- [ ] Add `contract_address` and `contract_name` columns to shared tables automatically
+- [ ] Table naming for shared tables: `{factory_name}_{event_name}` (no per-child suffix)
+- [ ] Unique tables: composite unique key becomes `(contract_address, original_unique_key)`
+- [ ] Aggregation tables: support both per-contract and cross-contract aggregation modes
+- [ ] Index on `contract_address` column for efficient per-child queries
+- [ ] Schema creation deferred until first child registration (factory starts with 0 children)
+- [ ] Backward compatibility: `shared_tables: false` (default) preserves current per-contract table behavior
+
+**Implementation Notes**:
+- Schema generator changes: when `shared_tables` is true, `BuildTableSchema` adds `contract_address TEXT NOT NULL` and `contract_name TEXT NOT NULL` columns, and adjusts unique constraints to be composite
+- Postgres: `CREATE INDEX idx_{table}_contract ON {table}(contract_address)` for efficient per-child filtering
+- The store's `ApplyOperations` needs no interface changes — it already operates on table names. The difference is that multiple contracts now target the same table name
+- Postgres unique constraint: `UNIQUE(contract_address, {unique_key})` instead of `UNIQUE({unique_key})`
+- Aggregation: per-contract aggregation uses `WHERE contract_address = ?` + `GROUP BY`; cross-contract drops the filter
+- Shared tables make cross-contract queries (3.5) trivial — just query the shared table with optional `contract_address` filter, no `UNION ALL` needed
+- BadgerDB shared tables: use key pattern `evt:{shared_table}:{contract_address}:{block}:{logIndex}`
+
+### 3.12 Factory-Aware APIs & Queries
+
+**Description**: API enhancements for querying factory-deployed contracts. Provides factory-scoped endpoints, per-child filtering, aggregate views across all children, and child metadata from factory events (e.g., token pairs).
+
+**Requirements**:
+- [ ] Factory children endpoint: `GET /v1/{factory}/children` — list all discovered child contracts with metadata (address, deployment block, sync status, factory event data)
+- [ ] Per-child event query: `GET /v1/{factory}/{event}?contract_address=0x...` — filter shared table to one child
+- [ ] Cross-child aggregation: `GET /v1/{factory}/{event}/aggregate` — aggregate across all children
+- [ ] Per-child aggregation: `GET /v1/{factory}/{event}/aggregate?contract_address=0x...`
+- [ ] Child count: `GET /v1/{factory}/children/count`
+- [ ] SSE streaming with optional per-child filter: `GET /v1/{factory}/{event}/stream?contract_address=0x...`
+- [ ] `ibis query` CLI: `ibis query {factory} {event} --contract-address 0x...`
+- [ ] Child metadata in responses: include factory event fields (e.g., `token0`, `token1` for JediSwap pairs) as queryable/filterable attributes
+- [ ] Status endpoint includes factory summary: child count, fully synced count, backfilling count
+
+**Implementation Notes**:
+- With shared tables (3.11), per-child queries are simple `WHERE contract_address = ?` filters — no unions needed
+- Without shared tables, per-child queries route to the specific child's table, cross-child queries use `UNION ALL`
+- The `/children` endpoint reads from `_ibis_factory_children` metadata table storing: `(factory_name, child_address, child_name, deployment_block, metadata_json, discovered_at)`
+- `metadata_json` stores additional factory event fields (e.g., `{"token0": "0x...", "token1": "0x..."}`) — these become queryable: `GET /v1/jediswap/children?token0=0x...`
+- SSE child filter: the EventBus subscriber checks `contract_address` field on events from shared tables
+- Consider a `/v1/{factory}/pairs` alias endpoint for AMM-style factories (configurable endpoint name in factory config)
+
+### 3.13 Contract Upgrade Tracking
+
+**Description**: Track `replace_class_syscall` upgrades on indexed contracts. When a contract's class hash changes, re-fetch its ABI and update event decoding schemas at the upgrade boundary. Essential for long-running indexers on upgradeable contracts using OpenZeppelin's Upgradeable component.
+
+**Requirements**:
+- [ ] Config option per contract: `track_upgrades: true` (default: false)
+- [ ] When enabled, also subscribe to `Upgraded(class_hash: ClassHash)` events from the contract
+- [ ] On `Upgraded` event: fetch new ABI via `starknet_getClass(new_class_hash)`, rebuild event registry and schemas
+- [ ] Handle schema evolution: new events get new tables/columns, changed event fields get new columns (never drop columns), removed events stop indexing forward
+- [ ] Store upgrade history in `_ibis_upgrades` table: `(contract_address, block_number, old_class_hash, new_class_hash, timestamp)`
+- [ ] API endpoint: `GET /v1/{contract}/upgrades` — list upgrade history for a contract
+- [ ] Graceful degradation: if new ABI can't be fetched or parsed, log error and continue with previous ABI
+- [ ] Events before and after upgrade are decoded with their respective ABIs (version-aware decoding)
+
+**Implementation Notes**:
+- The `Upgraded` event selector is `sn_keccak("Upgraded")` — ibis computes this at startup and adds it to the contract's subscription filter
+- If using Cairo components with `#[flat]`, the `Upgraded` event may have a nested key structure — handle both flat and nested variants
+- Schema migration on upgrade: use the existing `MigrateTable` method to add new columns for changed event structures
+- Version-aware decoding: store `(class_hash, from_block, to_block)` ranges per contract; when decoding historical events, use the ABI that was active at that block number
+- For factory children: if one child upgrades independently, only that child's decoding changes. If the factory pushes a batch upgrade, batch the ABI update across children
+- This is distinct from proxy support (3.6): proxies resolve the implementation at startup, upgrade tracking handles runtime class hash changes on any contract
+
+### 3.14 Monitoring and Observability
 
 **Description**: Add structured logging, metrics, and health monitoring for production deployments.
 
@@ -434,7 +671,7 @@
 - Prometheus client: `github.com/prometheus/client_golang`
 - Key metrics: `ibis_blocks_processed_total`, `ibis_events_indexed_total`, `ibis_sync_lag_blocks`, `ibis_api_requests_total`, `ibis_ws_reconnections_total`
 
-### 3.6 Kubernetes and Helm Chart
+### 3.15 Kubernetes and Helm Chart
 
 **Description**: Production-grade Kubernetes deployment configuration with Helm charts.
 
@@ -454,7 +691,7 @@
 - Consider splitting indexer and API into separate deployments sharing the same database
 - Reference zindex's `deploy/` and Helm patterns
 
-### 3.7 Forward Table Type
+### 3.16 Forward Table Type
 
 **Description**: A new `validTableType` called `forward` that forwards decoded event data to a specified URL via HTTP/HTTPS POST. Unlike `log`, `unique`, and `aggregation`, the `forward` type does not store events locally -- ibis acts as a pure event relay, parsing Starknet events via ABI and POSTing structured JSON payloads to an external endpoint. This enables users to build custom backends (their own database, message queue, analytics pipeline, etc.) and use ibis purely as an event decoder and forwarder.
 
