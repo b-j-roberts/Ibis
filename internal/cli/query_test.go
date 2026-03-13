@@ -482,3 +482,74 @@ func TestQueryEndToEnd(t *testing.T) {
 		t.Errorf("expected 3 CSV rows, got %d", len(records))
 	}
 }
+
+// TestBuildQuery_ContractAddressFlag verifies the --contract-address flag
+// adds a contract_address equality filter to the query.
+func TestBuildQuery_ContractAddressFlag(t *testing.T) {
+	origLimit, origOffset, origOrder, origFilters := queryLimit, queryOffset, queryOrder, queryFilters
+	origAddr := queryContractAddress
+	defer func() {
+		queryLimit, queryOffset, queryOrder, queryFilters = origLimit, origOffset, origOrder, origFilters
+		queryContractAddress = origAddr
+	}()
+
+	queryLimit = 50
+	queryOffset = 0
+	queryOrder = "block_number.desc"
+	queryFilters = nil
+	queryContractAddress = "0xC001"
+
+	q, err := buildQuery()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(q.Filters) != 1 {
+		t.Fatalf("expected 1 filter, got %d", len(q.Filters))
+	}
+	f := q.Filters[0]
+	if f.Field != "contract_address" {
+		t.Errorf("expected filter field=contract_address, got %q", f.Field)
+	}
+	if f.Operator != "eq" {
+		t.Errorf("expected filter operator=eq, got %q", f.Operator)
+	}
+	if f.Value != "0xC001" {
+		t.Errorf("expected filter value=0xC001, got %q", f.Value)
+	}
+}
+
+// TestBuildQuery_ContractAddressCombinedWithFilters verifies --contract-address
+// works alongside regular --filter flags.
+func TestBuildQuery_ContractAddressCombinedWithFilters(t *testing.T) {
+	origLimit, origOffset, origOrder, origFilters := queryLimit, queryOffset, queryOrder, queryFilters
+	origAddr := queryContractAddress
+	defer func() {
+		queryLimit, queryOffset, queryOrder, queryFilters = origLimit, origOffset, origOrder, origFilters
+		queryContractAddress = origAddr
+	}()
+
+	queryLimit = 50
+	queryOffset = 0
+	queryOrder = "block_number.desc"
+	queryFilters = []string{"block_number=gte.100"}
+	queryContractAddress = "0xC001"
+
+	q, err := buildQuery()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(q.Filters) != 2 {
+		t.Fatalf("expected 2 filters, got %d", len(q.Filters))
+	}
+
+	// First filter: from --filter flag.
+	if q.Filters[0].Field != "block_number" || q.Filters[0].Operator != "gte" {
+		t.Errorf("expected block_number gte filter, got %+v", q.Filters[0])
+	}
+	// Second filter: from --contract-address flag.
+	if q.Filters[1].Field != "contract_address" || q.Filters[1].Value != "0xC001" {
+		t.Errorf("expected contract_address filter, got %+v", q.Filters[1])
+	}
+}

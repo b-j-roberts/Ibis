@@ -160,6 +160,12 @@ func (e *Engine) registerSharedChild(ctx context.Context, factoryCS *contractSta
 			if err := e.store.CreateTable(ctx, sch); err != nil {
 				return fmt.Errorf("create shared table %s: %w", sch.Name, err)
 			}
+			e.logger.Info("created shared table",
+				"name", sch.Name,
+				"type", sch.TableType,
+				"columns", len(sch.Columns),
+				"factory", factoryCS.config.Name,
+			)
 			schemaList = append(schemaList, sch)
 		}
 
@@ -340,7 +346,7 @@ func buildChildName(factoryName string, factory *config.FactoryConfig, decoded m
 func isMetadataColumn(field string) bool {
 	switch field {
 	case "block_number", "log_index", "timestamp", "event_name",
-		"contract_address", "transaction_hash", "status":
+		"contract_address", "contract_name", "transaction_hash", "status":
 		return true
 	}
 	return false
@@ -388,8 +394,11 @@ func (e *Engine) FactoryChildren(factoryName string) []ContractInfo {
 				Address:      cs.config.Address,
 				Events:       len(cs.config.Events),
 				CurrentBlock: cursor,
+				StartBlock:   cs.config.StartBlock,
 				Status:       ContractStatusActive,
 				Dynamic:      true,
+				FactoryName:  cs.config.FactoryName,
+				FactoryMeta:  cs.config.FactoryMeta,
 			})
 		}
 	}

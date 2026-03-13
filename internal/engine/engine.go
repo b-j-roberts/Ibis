@@ -52,6 +52,7 @@ type ContractInfo struct {
 	Address      string         `json:"address"`
 	Events       int            `json:"events"`
 	CurrentBlock uint64         `json:"current_block"`
+	StartBlock   uint64         `json:"start_block,omitempty"`
 	Status       ContractStatus `json:"status"`
 	Dynamic      bool           `json:"dynamic"`
 	FactoryName  string         `json:"factory_name,omitempty"`
@@ -572,7 +573,12 @@ func (e *Engine) determineStartBlocks(ctx context.Context) (map[string]uint64, e
 			return nil, fmt.Errorf("get cursor for %s: %w", cs.config.Name, err)
 		}
 
-		configStart := e.cfg.Indexer.StartBlock
+		// Use per-contract start block if set (e.g., factory children use their deploy block),
+		// otherwise fall back to global indexer start block.
+		configStart := cs.config.StartBlock
+		if configStart == 0 {
+			configStart = e.cfg.Indexer.StartBlock
+		}
 
 		if configStart == 0 && cursor == 0 {
 			if !latestFetched {
@@ -673,6 +679,35 @@ func (e *Engine) EventChan() chan<- provider.RawEvent {
 // ReorgChan returns the engine's reorg channel for direct injection (testing).
 func (e *Engine) ReorgChan() chan<- provider.ReorgNotification {
 	return e.reorgs
+}
+
+// IsFactory returns true if a contract with the given name is registered
+// and has a factory configuration.
+func (e *Engine) IsFactory(name string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, cs := range e.contracts {
+		if cs.config.Name == name && cs.config.Factory != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// InjectContractForTest adds a contract directly to the engine's internal state
+// without ABI resolution. This is a test helper — do not use in production.
+func (e *Engine) InjectContractForTest(cc config.ContractConfig, schemas map[string]*types.TableSchema) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var addr *felt.Felt
+	if cc.Address != "" {
+		addr, _ = new(felt.Felt).SetString(cc.Address)
+	}
+	e.contracts = append(e.contracts, &contractState{
+		config:  cc,
+		address: addr,
+		schemas: schemas,
+	})
 }
 
 // Store returns the engine's store (for testing/inspection).

@@ -147,7 +147,13 @@ func (s *Server) handleGetAggregate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.store.GetAggregation(r.Context(), schema.Name, store.Query{})
+	q, err := parseQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := s.store.GetAggregation(r.Context(), schema.Name, q)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "aggregation failed")
 		s.logger.Error("GetAggregation failed", "table", schema.Name, "error", err)
@@ -197,10 +203,40 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		contracts = append(contracts, entry)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"current_block": globalCursor,
 		"contracts":     contracts,
-	})
+	}
+
+	// Add factory summary: child count, synced count, backfilling count.
+	if s.engine != nil {
+		factories := make(map[string]any)
+		for i := range contractsCopy {
+			c := &contractsCopy[i]
+			if c.Factory != nil {
+				children := s.engine.FactoryChildren(c.Name)
+				synced := 0
+				backfilling := 0
+				for _, child := range children {
+					if child.CurrentBlock >= globalCursor {
+						synced++
+					} else {
+						backfilling++
+					}
+				}
+				factories[c.Name] = map[string]any{
+					"child_count": len(children),
+					"synced":      synced,
+					"backfilling": backfilling,
+				}
+			}
+		}
+		if len(factories) > 0 {
+			resp["factories"] = factories
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func eventsToMaps(events []types.IndexedEvent) []map[string]any {

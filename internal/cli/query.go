@@ -20,14 +20,15 @@ import (
 )
 
 var (
-	queryLimit     int
-	queryOffset    int
-	queryOrder     string
-	queryFilters   []string
-	queryUnique    bool
-	queryAggregate bool
-	queryFormat    string
-	queryList      bool
+	queryLimit           int
+	queryOffset          int
+	queryOrder           string
+	queryFilters         []string
+	queryUnique          bool
+	queryAggregate       bool
+	queryFormat          string
+	queryList            bool
+	queryContractAddress string
 
 	// testCreateStoreOverride is a test hook. When non-nil, runQuery uses the
 	// returned store instead of opening one from config.
@@ -44,6 +45,7 @@ Examples:
   ibis query MyContract Transfer
   ibis query MyContract Transfer --limit 10 --order block_number.asc
   ibis query MyContract Transfer --filter "block_number=gte.100"
+  ibis query MyFactory Swap --contract-address 0x123...
   ibis query MyContract LeaderboardUpdate --unique
   ibis query MyContract VolumeUpdate --aggregate
   ibis query --list`,
@@ -60,6 +62,7 @@ func init() {
 	queryCmd.Flags().BoolVar(&queryAggregate, "aggregate", false, "query aggregation results")
 	queryCmd.Flags().StringVar(&queryFormat, "format", "json", "output format: json, table, csv")
 	queryCmd.Flags().BoolVar(&queryList, "list", false, "list all available tables/events")
+	queryCmd.Flags().StringVar(&queryContractAddress, "contract-address", "", "filter by contract address (for factory shared tables)")
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
@@ -178,6 +181,15 @@ func buildQuery() (store.Query, error) {
 			return q, err
 		}
 		q.Filters = append(q.Filters, filter)
+	}
+
+	// Add contract address filter for factory shared table queries.
+	if queryContractAddress != "" {
+		q.Filters = append(q.Filters, store.Filter{
+			Field:    "contract_address",
+			Operator: "eq",
+			Value:    queryContractAddress,
+		})
 	}
 
 	return q, nil

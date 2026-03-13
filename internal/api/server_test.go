@@ -361,12 +361,15 @@ func TestNotFound(t *testing.T) {
 	}
 }
 
-func TestInvalidFilter(t *testing.T) {
+func TestFilterDefaultsToEq(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
+	// Filters without an operator prefix now default to "eq" instead of
+	// returning a 400 error. This enables simple filters like
+	// ?contract_address=0x123 for factory per-child queries.
 	status := getStatus(t, ts, "/v1/MyToken/Transfer?from=badformat")
-	if status != http.StatusBadRequest {
-		t.Errorf("expected 400 for invalid filter, got %d", status)
+	if status != http.StatusOK {
+		t.Errorf("expected 200 for filter defaulting to eq, got %d", status)
 	}
 }
 

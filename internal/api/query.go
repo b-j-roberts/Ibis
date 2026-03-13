@@ -82,19 +82,26 @@ func parseFiltersFromURL(r *http.Request) ([]store.Filter, error) {
 
 // parseFilterParam parses "op.value" format into a Filter.
 // e.g., field "block_number" with value "gte.100000" -> {Field: "block_number", Operator: "gte", Value: "100000"}.
+// When no valid operator prefix is found, defaults to "eq" with the raw value.
+// This enables simple filters like ?contract_address=0x123 without the eq. prefix.
 func parseFilterParam(field, value string) (store.Filter, error) {
 	validOps := map[string]bool{
 		"eq": true, "neq": true, "gt": true, "gte": true, "lt": true, "lte": true,
 	}
 
 	parts := strings.SplitN(value, ".", 2)
-	if len(parts) != 2 || !validOps[parts[0]] {
-		return store.Filter{}, fmt.Errorf("invalid filter for %s: expected op.value (e.g., eq.123), got %s", field, value)
+	if len(parts) == 2 && validOps[parts[0]] {
+		return store.Filter{
+			Field:    field,
+			Operator: parts[0],
+			Value:    parts[1],
+		}, nil
 	}
 
+	// No valid operator prefix: default to equality filter.
 	return store.Filter{
 		Field:    field,
-		Operator: parts[0],
-		Value:    parts[1],
+		Operator: "eq",
+		Value:    value,
 	}, nil
 }
