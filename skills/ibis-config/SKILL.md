@@ -1,0 +1,204 @@
+---
+name: ibis-config
+description: "This skill generates ibis.config.yaml files for the Ibis Starknet event indexer from contract addresses, natural language descriptions, or existing contract source code. It should be used when a user wants to create or modify an ibis indexer configuration, asks to index events from a contract, provides a Starknet contract address for indexing, or says things like generate an ibis config, set up indexing for this AMM, or add Transfer events to my config. This skill works both inside and outside of ibis project directories. Triggered by any request involving ibis configuration generation, Starknet event indexing setup, or contract ABI analysis for indexing purposes."
+---
+
+# Ibis Config Generator
+
+Generate complete `ibis.config.yaml` files for the Ibis Starknet event indexer by analyzing contract ABIs, recommending table types, and supporting factory contract patterns.
+
+## Workflow
+
+### Step 1: Gather Input
+
+Determine the user's intent from one or more of:
+- A Starknet contract address (e.g., `0x049d36...`)
+- A network (mainnet or sepolia; default: mainnet)
+- A natural language description (e.g., "index all swap events from this AMM")
+- A request to modify an existing config
+- A contract source directory with Cairo code
+
+If only a contract address is provided, default to mainnet. Ask for the network only if ambiguous.
+
+For iterative refinement (modifying existing config), read the current `ibis.config.yaml` first.
+
+### Step 2: Fetch and Analyze the Contract ABI
+
+Fetch the ABI from Starknet RPC:
+
+```bash
+bash SKILL_DIR/scripts/fetch_abi.sh <contract_address> [rpc_url]
+```
+
+Default RPC endpoints:
+- **Mainnet**: `https://free-rpc.nethermind.io/mainnet-juno`
+- **Sepolia**: `https://free-rpc.nethermind.io/sepolia-juno`
+
+Save output and parse events:
+
+```bash
+bash SKILL_DIR/scripts/fetch_abi.sh 0x049d36... > /tmp/ibis_abi.json
+python3 SKILL_DIR/scripts/parse_events.py /tmp/ibis_abi.json
+```
+
+The parse script outputs structured JSON with:
+- All events with key/data fields and Cairo types
+- Recommended table types with reasoning
+- Unique key candidates and aggregatable numeric fields per event
+- Factory candidate events (events containing ContractAddress fields with "Created"/"Deployed" names)
+
+If inside a Cairo project directory, check for local ABI files at `target/dev/*_ContractName.contract_class.json`. Local ABIs provide richer type information — set `abi:` to the file path or contract name for smart discovery.
+
+### Step 3: Present Event Analysis
+
+Display discovered events in a table before generating config:
+
+```
+Found N events in contract:
+
+| Event           | Fields                          | Recommended Type | Reason                    |
+|-----------------|---------------------------------|------------------|---------------------------|
+| Transfer        | from, to, value(u256)           | log              | Transfer event history    |
+| BalanceUpdated  | account, balance(u256)          | unique           | Name contains 'Updated'  |
+| VolumeAccrued   | pair_id, amount(u128)           | aggregation      | Numeric accumulation      |
+```
+
+Highlight:
+- Events with numeric fields as aggregation candidates (name the specific fields)
+- Events with address key fields as unique table candidates (name the key field)
+- Factory candidate events if detected
+
+Let the user confirm or override recommendations before proceeding.
+
+### Step 4: Generate the Config
+
+Read `references/config-schema.md` for complete schema specification, defaults, and validation rules.
+
+#### Table Type Heuristics
+
+**Log** (default for most events):
+- Transfer, Swap, Mint, Burn, Deposit, Withdraw, Approve, Claim, Trade, Order
+- Any event representing a discrete action
+
+**Unique** (last-write-wins):
+- Names containing: Update, Changed, Set, Modify, State, Balance, Position, Config, Leaderboard, Score, Status
+- Events with an address key field + state data fields
+- Set `unique_key` to the most identifying key field (prefer address fields)
+
+**Aggregation** (auto-computed):
+- Names containing: Volume, Count, Total, Accumulated, Fee, Revenue
+- Events with numeric data fields suitable for sum/avg
+- Recommend: `sum` for amounts/volumes, `count` for occurrences, `avg` for rates/prices
+
+#### Generation Rules
+
+1. **Contract name**: Descriptive PascalCase. Derive from contract type if unknown (e.g., "StarknetETH", "JediSwapRouter")
+2. **Network/RPC**: Default to mainnet HTTP. Add comment that WSS is preferred for production
+3. **Database**: Default `memory` for quick testing. Comment suggesting `postgres` for production
+4. **Start block**: Default 0 (latest). Use specific block for historical indexing
+5. **ABI**: `fetch` for on-chain. Local path or smart name if in Cairo/Scarb project
+6. **Wildcard**: Use `name: "*"` when user wants all events with same table type. Override specifics as needed
+7. **Env vars**: `${VAR_NAME}` for secrets (passwords, API keys, admin keys)
+
+#### Output Format
+
+```yaml
+# Generated by ibis-config skill
+# Docs: https://github.com/...
+
+network: mainnet
+rpc: https://free-rpc.nethermind.io/mainnet-juno  # WSS preferred for production
+
+database:
+  backend: memory  # Use postgres for production
+  # postgres:
+  #   host: ${IBIS_DB_HOST}
+  #   port: 5432
+  #   user: ${IBIS_DB_USER}
+  #   password: ${IBIS_DB_PASSWORD}
+  #   name: ${IBIS_DB_NAME}
+
+api:
+  host: 0.0.0.0
+  port: 8080
+
+indexer:
+  start_block: 0
+  pending_blocks: true
+  batch_size: 10
+
+contracts:
+  - name: MyContract
+    address: "0x049d..."
+    abi: fetch
+    events:
+      - name: "*"
+        table:
+          type: log
+```
+
+Write config to `./ibis.config.yaml` unless user specifies another path.
+
+### Step 5: Factory Contract Detection
+
+If the parse script identifies factory candidate events, or user mentions factory/AMM/pool deployment:
+
+1. Identify the factory event (e.g., `PairCreated`, `PoolDeployed`)
+2. Identify the child address field (ContractAddress-type data field)
+3. Ask if children share the same ABI (typically yes for AMM pairs)
+4. Recommend `shared_tables: true` for factories with many children (10+)
+5. Generate `child_events` with wildcard default + specific overrides for unique/aggregation events
+6. Set `child_name_template` using meaningful factory event fields (e.g., `"{factory}_{token0}_{token1}"`)
+
+Example factory config:
+
+```yaml
+factory:
+  event: PairCreated
+  child_address_field: pair
+  child_abi: fetch
+  shared_tables: true
+  child_name_template: "{factory}_{short_address}"
+  child_events:
+    - name: "*"
+      table:
+        type: log
+    - name: Swap
+      table:
+        type: aggregation
+        aggregate:
+          - column: total_volume
+            operation: sum
+            field: amount_in
+          - column: swap_count
+            operation: count
+            field: amount_in
+```
+
+### Step 6: Iterative Refinement
+
+Support modification requests against existing configs:
+- "Add Transfer events" → add new event entry
+- "Make price table unique by pair_id" → change type, add unique_key
+- "Add a factory for this AMM" → add factory section
+- "Change database to postgres" → update database section with env var placeholders
+- "Add another contract" → append to contracts array
+- "Use aggregation for volume with sum on amount" → add aggregation config
+
+Read existing config, apply changes, write updated file.
+
+## Key Behaviors
+
+- Always fetch and analyze the real ABI before generating config — never guess event structures
+- Present event analysis with recommendations before generating final config
+- Default to simple configs (memory backend, log tables); let users escalate complexity
+- For production: recommend postgres backend and WSS RPC
+- Note dynamic contract registration capability (`POST /v1/admin/contracts`) but focus on config file generation
+- If ABI fetch fails (proxy contract, network error), suggest using a local ABI file path
+- Clean up `/tmp/ibis_abi.json` after config generation
+- Quote all contract addresses in YAML (they are strings, not hex numbers)
+- Metadata columns (block_number, transaction_hash, log_index, timestamp, contract_address, event_name, status) are auto-added to all tables — do not include them in event configs
+
+## Reference
+
+For detailed schema, validation rules, defaults, factory patterns, Cairo type mappings, and aggregation specs: read `references/config-schema.md`.
