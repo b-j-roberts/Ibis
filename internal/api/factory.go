@@ -35,7 +35,7 @@ func (s *Server) handleFactoryChildren(w http.ResponseWriter, r *http.Request) {
 
 	data := make([]map[string]any, 0, len(children))
 	for _, child := range children {
-		entry := factoryChildToMap(child)
+		entry := factoryChildToMap(&child)
 		if len(filters) > 0 && !matchFilters(entry, filters) {
 			continue
 		}
@@ -75,7 +75,7 @@ func (s *Server) handleFactoryChildCount(w http.ResponseWriter, r *http.Request)
 	if len(filters) > 0 {
 		count = 0
 		for _, child := range children {
-			entry := factoryChildToMap(child)
+			entry := factoryChildToMap(&child)
 			if matchFilters(entry, filters) {
 				count++
 			}
@@ -87,7 +87,7 @@ func (s *Server) handleFactoryChildCount(w http.ResponseWriter, r *http.Request)
 
 // factoryChildToMap converts a ContractInfo into a flat map with factory
 // metadata fields promoted to top-level for queryability.
-func factoryChildToMap(info engine.ContractInfo) map[string]any {
+func factoryChildToMap(info *engine.ContractInfo) map[string]any {
 	m := map[string]any{
 		"name":             info.Name,
 		"address":          info.Address,

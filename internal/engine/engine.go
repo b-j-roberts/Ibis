@@ -696,7 +696,7 @@ func (e *Engine) IsFactory(name string) bool {
 
 // InjectContractForTest adds a contract directly to the engine's internal state
 // without ABI resolution. This is a test helper — do not use in production.
-func (e *Engine) InjectContractForTest(cc config.ContractConfig, schemas map[string]*types.TableSchema) {
+func (e *Engine) InjectContractForTest(cc *config.ContractConfig, schemas map[string]*types.TableSchema) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var addr *felt.Felt
@@ -704,7 +704,7 @@ func (e *Engine) InjectContractForTest(cc config.ContractConfig, schemas map[str
 		addr, _ = new(felt.Felt).SetString(cc.Address)
 	}
 	e.contracts = append(e.contracts, &contractState{
-		config:  cc,
+		config:  *cc,
 		address: addr,
 		schemas: schemas,
 	})

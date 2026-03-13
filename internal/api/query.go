@@ -84,7 +84,7 @@ func parseFiltersFromURL(r *http.Request) ([]store.Filter, error) {
 // e.g., field "block_number" with value "gte.100000" -> {Field: "block_number", Operator: "gte", Value: "100000"}.
 // When no valid operator prefix is found, defaults to "eq" with the raw value.
 // This enables simple filters like ?contract_address=0x123 without the eq. prefix.
-func parseFilterParam(field, value string) (store.Filter, error) {
+func parseFilterParam(field, value string) (store.Filter, error) { //nolint:unparam // error kept for future validation
 	validOps := map[string]bool{
 		"eq": true, "neq": true, "gt": true, "gte": true, "lt": true, "lte": true,
 	}

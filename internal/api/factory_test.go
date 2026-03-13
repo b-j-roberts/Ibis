@@ -85,7 +85,7 @@ func setupFactoryTestServer(t *testing.T) (*httptest.Server, *api.EventBus) {
 		"Swap":   swapSchema,
 		"Volume": volumeSchema,
 	}
-	eng.InjectContractForTest(config.ContractConfig{
+	eng.InjectContractForTest(&config.ContractConfig{
 		Name:    "JediSwap",
 		Address: "0xF001",
 		Factory: &config.FactoryConfig{
@@ -99,7 +99,7 @@ func setupFactoryTestServer(t *testing.T) (*httptest.Server, *api.EventBus) {
 	}, factorySchemas)
 
 	// Child 1.
-	eng.InjectContractForTest(config.ContractConfig{
+	eng.InjectContractForTest(&config.ContractConfig{
 		Name:         "JediSwap_c001",
 		Address:      "0xC001",
 		FactoryName:  "JediSwap",
@@ -110,7 +110,7 @@ func setupFactoryTestServer(t *testing.T) (*httptest.Server, *api.EventBus) {
 	}, factorySchemas)
 
 	// Child 2.
-	eng.InjectContractForTest(config.ContractConfig{
+	eng.InjectContractForTest(&config.ContractConfig{
 		Name:         "JediSwap_c002",
 		Address:      "0xC002",
 		FactoryName:  "JediSwap",
@@ -193,14 +193,13 @@ func setupFactoryTestServer(t *testing.T) (*httptest.Server, *api.EventBus) {
 	return ts, bus
 }
 
-func factoryGet(t *testing.T, ts *httptest.Server, path string) (int, map[string]any) {
+func factoryGet(t *testing.T, ts *httptest.Server, path string) (code int, body map[string]any) {
 	t.Helper()
 	resp, err := http.Get(ts.URL + path)
 	if err != nil {
 		t.Fatalf("GET %s: %v", path, err)
 	}
 	defer resp.Body.Close()
-	var body map[string]any
 	json.NewDecoder(resp.Body).Decode(&body)
 	return resp.StatusCode, body
 }
@@ -369,7 +368,7 @@ func TestFactoryAPI_SSEStreamWithChildFilter(t *testing.T) {
 	ts, _ := setupFactoryTestServer(t)
 
 	req, _ := http.NewRequest("GET",
-		ts.URL+"/v1/JediSwap/Swap/stream?contract_address=eq.0xC001", nil)
+		ts.URL+"/v1/JediSwap/Swap/stream?contract_address=eq.0xC001", http.NoBody)
 	sseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req = req.WithContext(sseCtx)
@@ -393,7 +392,7 @@ func TestFactoryAPI_SSEEventDeliveryFiltered(t *testing.T) {
 	ts, bus := setupFactoryTestServer(t)
 
 	req, _ := http.NewRequest("GET",
-		ts.URL+"/v1/JediSwap/Swap/stream?contract_address=eq.0xC001", nil)
+		ts.URL+"/v1/JediSwap/Swap/stream?contract_address=eq.0xC001", http.NoBody)
 	sseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req = req.WithContext(sseCtx)
