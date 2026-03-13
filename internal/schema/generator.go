@@ -21,10 +21,17 @@ func MetadataColumns() []types.Column {
 	}
 }
 
+// BuildOptions controls shared table behavior for factory children.
+type BuildOptions struct {
+	SharedTable bool   // Build schemas as shared tables
+	FactoryName string // Factory name used for table naming
+}
+
 // BuildSchemas creates TableSchema definitions for a contract's configured events.
 // Handles wildcard ("*") expansion: all ABI events get the wildcard's table type,
 // with specific event entries overriding the default.
-func BuildSchemas(cc *config.ContractConfig, contractABI *abi.ABI, registry *abi.EventRegistry) map[string]*types.TableSchema {
+// Pass opts for factory children with shared tables; nil for normal contracts.
+func BuildSchemas(cc *config.ContractConfig, contractABI *abi.ABI, registry *abi.EventRegistry, opts *BuildOptions) map[string]*types.TableSchema {
 	schemas := make(map[string]*types.TableSchema)
 
 	// Build a lookup of explicitly configured events.
@@ -66,7 +73,7 @@ func BuildSchemas(cc *config.ContractConfig, contractABI *abi.ABI, registry *abi
 			continue
 		}
 
-		schema := BuildTableSchema(cc.Name, ev, ec)
+		schema := BuildTableSchema(cc.Name, ev, ec, opts)
 		schemas[ev.Name] = schema
 	}
 
@@ -74,11 +81,25 @@ func BuildSchemas(cc *config.ContractConfig, contractABI *abi.ABI, registry *abi
 }
 
 // BuildTableSchema creates a single TableSchema from an event definition and config.
-func BuildTableSchema(contractName string, ev *abi.EventDef, ec config.EventConfig) *types.TableSchema {
+// Pass opts for factory shared tables; nil for normal contracts.
+func BuildTableSchema(contractName string, ev *abi.EventDef, ec config.EventConfig, opts *BuildOptions) *types.TableSchema {
 	tableName := strings.ToLower(contractName + "_" + ev.Name)
+	shared := false
+	contract := contractName
+
+	if opts != nil && opts.SharedTable {
+		tableName = strings.ToLower(opts.FactoryName + "_" + ev.Name)
+		contract = opts.FactoryName
+		shared = true
+	}
 
 	// Start with standard metadata columns.
 	columns := MetadataColumns()
+
+	// Add contract_name column for shared tables.
+	if shared {
+		columns = append(columns, types.Column{Name: "contract_name", Type: "string"})
+	}
 
 	// Event-specific columns from ABI.
 	for _, member := range ev.KeyMembers {
@@ -114,13 +135,14 @@ func BuildTableSchema(contractName string, ev *abi.EventDef, ec config.EventConf
 	}
 
 	return &types.TableSchema{
-		Name:       tableName,
-		Contract:   contractName,
-		Event:      ev.Name,
-		TableType:  tableType,
-		Columns:    columns,
-		UniqueKey:  ec.Table.UniqueKey,
-		Aggregates: aggregates,
+		Name:        tableName,
+		Contract:    contract,
+		Event:       ev.Name,
+		TableType:   tableType,
+		Columns:     columns,
+		UniqueKey:   ec.Table.UniqueKey,
+		Aggregates:  aggregates,
+		SharedTable: shared,
 	}
 }
 

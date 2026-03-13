@@ -186,7 +186,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	contracts := make([]map[string]any, 0, len(contractsCopy))
-	for _, c := range contractsCopy {
+	for i := range contractsCopy {
+		c := &contractsCopy[i]
 		entry := map[string]any{
 			"name":          c.Name,
 			"address":       c.Address,

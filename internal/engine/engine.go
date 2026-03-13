@@ -30,6 +30,10 @@ type contractState struct {
 
 	// childABI caches the resolved ABI for factory children. Set on first child registration.
 	childABI *abi.ABI
+
+	// sharedSchemas caches shared table schemas for factory children with shared_tables: true.
+	// Set on first child registration; reused by all subsequent children.
+	sharedSchemas map[string]*types.TableSchema
 }
 
 // ContractStatus represents the current state of an indexed contract.
@@ -227,7 +231,7 @@ func (e *Engine) RegisterContract(ctx context.Context, cc *config.ContractConfig
 	}
 
 	registry := abi.NewEventRegistry(contractABI)
-	schemas := schema.BuildSchemas(cc, contractABI, registry)
+	schemas := schema.BuildSchemas(cc, contractABI, registry, nil)
 
 	// Parse contract address.
 	address, err := new(felt.Felt).SetString(cc.Address)
@@ -332,9 +336,12 @@ func (e *Engine) DeregisterContract(ctx context.Context, name string, dropTables
 		e.subscriber.RemoveContract(found.address.String())
 	}
 
-	// Drop tables if requested.
+	// Drop tables if requested (skip shared tables — other children still use them).
 	if dropTables {
 		for _, sch := range found.schemas {
+			if sch.SharedTable {
+				continue
+			}
 			if err := e.store.DropTable(ctx, sch.Name); err != nil {
 				e.logger.Error("failed to drop table", "table", sch.Name, "error", err)
 			}
@@ -467,13 +474,14 @@ func (e *Engine) setup(ctx context.Context) error {
 	} else {
 		// Merge: static config takes precedence on name conflicts.
 		staticNames := make(map[string]bool, len(e.cfg.Contracts))
-		for _, cc := range e.cfg.Contracts {
-			staticNames[cc.Name] = true
+		for i := range e.cfg.Contracts {
+			staticNames[e.cfg.Contracts[i].Name] = true
 		}
-		for _, dc := range dynamicContracts {
+		for i := range dynamicContracts {
+			dc := &dynamicContracts[i]
 			if !staticNames[dc.Name] {
 				dc.Dynamic = true
-				allContracts = append(allContracts, dc)
+				allContracts = append(allContracts, *dc)
 				e.logger.Info("loaded dynamic contract from store", "name", dc.Name, "address", dc.Address)
 			} else {
 				e.logger.Info("skipping dynamic contract (overridden by static config)", "name", dc.Name)
@@ -487,14 +495,24 @@ func (e *Engine) setup(ctx context.Context) error {
 		return fmt.Errorf("resolve ABIs: %w", err)
 	}
 
-	for _, cc := range allContracts {
+	for i := range allContracts {
+		cc := &allContracts[i]
 		contractABI := abis[cc.Address]
 		if contractABI == nil {
 			return fmt.Errorf("no ABI resolved for contract %s (%s)", cc.Name, cc.Address)
 		}
 
 		registry := abi.NewEventRegistry(contractABI)
-		schemas := schema.BuildSchemas(&cc, contractABI, registry)
+
+		// For factory children with shared tables, use factory name for table naming.
+		var buildOpts *schema.BuildOptions
+		if cc.SharedTables && cc.FactoryName != "" {
+			buildOpts = &schema.BuildOptions{
+				SharedTable: true,
+				FactoryName: cc.FactoryName,
+			}
+		}
+		schemas := schema.BuildSchemas(cc, contractABI, registry, buildOpts)
 
 		// Parse contract address.
 		address, err := new(felt.Felt).SetString(cc.Address)
@@ -503,7 +521,7 @@ func (e *Engine) setup(ctx context.Context) error {
 		}
 
 		cs := &contractState{
-			config:   cc,
+			config:   *cc,
 			address:  address,
 			abi:      contractABI,
 			registry: registry,

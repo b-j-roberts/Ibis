@@ -564,7 +564,8 @@ func buildCleanYAML(cfg *config.Config) yaml.Node {
 
 	// Contracts.
 	contractsSeq := &yaml.Node{Kind: yaml.SequenceNode}
-	for _, c := range cfg.Contracts {
+	for i := range cfg.Contracts {
+		c := &cfg.Contracts[i]
 		cc := &yaml.Node{Kind: yaml.MappingNode}
 		cc.Content = append(cc.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Value: "name"}, scalar(c.Name),

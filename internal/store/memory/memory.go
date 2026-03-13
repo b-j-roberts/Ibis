@@ -97,7 +97,8 @@ func (s *MemoryStore) applyOp(op store.Operation) {
 				if s.uniqueEntries[op.Table] == nil {
 					s.uniqueEntries[op.Table] = make(map[string]types.IndexedEvent)
 				}
-				s.uniqueEntries[op.Table][fmt.Sprint(ukVal)] = evt
+				entryKey := uniqueEntryKey(&schema, op.Data, fmt.Sprint(ukVal))
+				s.uniqueEntries[op.Table][entryKey] = evt
 			}
 		}
 
@@ -126,7 +127,8 @@ func (s *MemoryStore) applyOp(op store.Operation) {
 				if s.uniqueEntries[op.Table] == nil {
 					s.uniqueEntries[op.Table] = make(map[string]types.IndexedEvent)
 				}
-				s.uniqueEntries[op.Table][fmt.Sprint(ukVal)] = evt
+				entryKey := uniqueEntryKey(&schema, op.Data, fmt.Sprint(ukVal))
+				s.uniqueEntries[op.Table][entryKey] = evt
 			}
 		}
 
@@ -139,7 +141,8 @@ func (s *MemoryStore) applyOp(op store.Operation) {
 		if hasSchema && schema.TableType == types.TableTypeUnique && schema.UniqueKey != "" {
 			if ukVal, ok := op.Data[schema.UniqueKey]; ok {
 				if tbl := s.uniqueEntries[op.Table]; tbl != nil {
-					delete(tbl, fmt.Sprint(ukVal))
+					entryKey := uniqueEntryKey(&schema, op.Data, fmt.Sprint(ukVal))
+					delete(tbl, entryKey)
 				}
 			}
 		}
@@ -361,8 +364,8 @@ func (s *MemoryStore) GetDynamicContracts(_ context.Context) ([]config.ContractC
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]config.ContractConfig, 0, len(s.dynamicContracts))
-	for _, cc := range s.dynamicContracts {
-		result = append(result, cc)
+	for k := range s.dynamicContracts {
+		result = append(result, s.dynamicContracts[k])
 	}
 	return result, nil
 }
@@ -383,6 +386,16 @@ func (s *MemoryStore) DeleteCursor(_ context.Context, contract string) error {
 
 func (s *MemoryStore) Close() error {
 	return nil
+}
+
+// uniqueEntryKey builds the map key for unique entries. For shared tables, includes
+// contract_address to provide per-contract uniqueness.
+func uniqueEntryKey(schema *types.TableSchema, data map[string]any, ukVal string) string {
+	if schema.SharedTable {
+		contractAddr := fmt.Sprint(data["contract_address"])
+		return contractAddr + ":" + ukVal
+	}
+	return ukVal
 }
 
 // ---- Internal helpers ----

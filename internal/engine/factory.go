@@ -64,13 +64,14 @@ func (e *Engine) handleFactoryEvent(ctx context.Context, cs *contractState, deco
 	}
 
 	cc := &config.ContractConfig{
-		Name:        childName,
-		Address:     childAddr,
-		ABI:         childABI,
-		Events:      factory.ChildEvents,
-		StartBlock:  raw.BlockNumber,
-		FactoryName: cs.config.Name,
-		FactoryMeta: meta,
+		Name:         childName,
+		Address:      childAddr,
+		ABI:          childABI,
+		Events:       factory.ChildEvents,
+		StartBlock:   raw.BlockNumber,
+		FactoryName:  cs.config.Name,
+		FactoryMeta:  meta,
+		SharedTables: factory.SharedTables,
 	}
 
 	// Register the child using the fast path with cached ABI if available.
@@ -98,6 +99,9 @@ func (e *Engine) registerFactoryChild(ctx context.Context, factoryCS *contractSt
 	// Try to use cached child ABI.
 	childABI := factoryCS.childABI
 	if childABI != nil {
+		if factoryCS.config.Factory.SharedTables {
+			return e.registerSharedChild(ctx, factoryCS, cc, childABI)
+		}
 		return e.registerWithABI(ctx, cc, childABI)
 	}
 
@@ -116,7 +120,100 @@ func (e *Engine) registerFactoryChild(ctx context.Context, factoryCS *contractSt
 	// Cache for future children.
 	factoryCS.childABI = childABI
 
+	if factoryCS.config.Factory.SharedTables {
+		return e.registerSharedChild(ctx, factoryCS, cc, childABI)
+	}
 	return e.registerWithABI(ctx, cc, childABI)
+}
+
+// registerSharedChild registers a factory child that writes to shared tables.
+// On the first child, shared schemas are built and tables created. Subsequent
+// children reuse the cached schemas (same table names, no new tables).
+func (e *Engine) registerSharedChild(ctx context.Context, factoryCS *contractState, cc *config.ContractConfig, childABI *abi.ABI) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Check for duplicate name.
+	for _, cs := range e.contracts {
+		if cs.config.Name == cc.Name {
+			return fmt.Errorf("contract %q already registered", cc.Name)
+		}
+	}
+
+	cc.Dynamic = true
+
+	registry := abi.NewEventRegistry(childABI)
+
+	// Build shared schemas on first child, reuse for subsequent children.
+	schemas := factoryCS.sharedSchemas
+	var schemaList []*types.TableSchema
+
+	if schemas == nil {
+		opts := &schema.BuildOptions{
+			SharedTable: true,
+			FactoryName: factoryCS.config.Name,
+		}
+		schemas = schema.BuildSchemas(cc, childABI, registry, opts)
+
+		// Create shared tables in store.
+		for _, sch := range schemas {
+			if err := e.store.CreateTable(ctx, sch); err != nil {
+				return fmt.Errorf("create shared table %s: %w", sch.Name, err)
+			}
+			schemaList = append(schemaList, sch)
+		}
+
+		factoryCS.sharedSchemas = schemas
+	}
+
+	// Parse contract address.
+	address, err := new(felt.Felt).SetString(cc.Address)
+	if err != nil {
+		return fmt.Errorf("parsing address for %s: %w", cc.Name, err)
+	}
+
+	// Persist dynamic contract config.
+	if err := e.store.SaveDynamicContract(ctx, cc); err != nil {
+		return fmt.Errorf("persisting factory child %s: %w", cc.Name, err)
+	}
+
+	cs := &contractState{
+		config:   *cc,
+		address:  address,
+		abi:      childABI,
+		registry: registry,
+		schemas:  schemas, // All children share the same schema references.
+	}
+	e.contracts = append(e.contracts, cs)
+
+	// Spawn subscription if the engine is running.
+	if e.subscriber != nil && e.runCtx != nil {
+		sub := provider.ContractSubscription{
+			Address:    address,
+			StartBlock: cc.StartBlock,
+		}
+
+		if !hasWildcardEvent(cc) {
+			var selectors []*felt.Felt
+			for _, ec := range cc.Events {
+				if ev := registry.MatchName(ec.Name); ev != nil {
+					selectors = append(selectors, ev.Selector)
+				}
+			}
+			if len(selectors) > 0 {
+				sub.Keys = [][]*felt.Felt{selectors}
+			}
+		}
+
+		e.subscriber.AddContract(e.runCtx, sub)
+	}
+
+	// Notify API server (schemas only for first child when tables were created).
+	if e.onContractRegistered != nil {
+		e.onContractRegistered(cc, schemaList)
+	}
+
+	return nil
 }
 
 // registerWithABI registers a contract using a pre-resolved ABI, skipping the
@@ -135,7 +232,7 @@ func (e *Engine) registerWithABI(ctx context.Context, cc *config.ContractConfig,
 	cc.Dynamic = true
 
 	registry := abi.NewEventRegistry(contractABI)
-	schemas := schema.BuildSchemas(cc, contractABI, registry)
+	schemas := schema.BuildSchemas(cc, contractABI, registry, nil)
 
 	// Parse contract address.
 	address, err := new(felt.Felt).SetString(cc.Address)

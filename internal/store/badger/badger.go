@@ -192,7 +192,8 @@ func (s *BadgerStore) applyOp(wb *badgerdb.WriteBatch, op store.Operation, aggDe
 		}
 		if hasSchema && schema.TableType == types.TableTypeUnique && schema.UniqueKey != "" {
 			if ukVal, ok := op.Data[schema.UniqueKey]; ok {
-				if err := wb.Set(unqKey(op.Table, fmt.Sprint(ukVal)), data); err != nil {
+				key := s.buildUnqKey(op, &schema, fmt.Sprint(ukVal))
+				if err := wb.Set(key, data); err != nil {
 					return err
 				}
 			}
@@ -212,7 +213,8 @@ func (s *BadgerStore) applyOp(wb *badgerdb.WriteBatch, op store.Operation, aggDe
 		}
 		if hasSchema && schema.TableType == types.TableTypeUnique && schema.UniqueKey != "" {
 			if ukVal, ok := op.Data[schema.UniqueKey]; ok {
-				if err := wb.Set(unqKey(op.Table, fmt.Sprint(ukVal)), data); err != nil {
+				key := s.buildUnqKey(op, &schema, fmt.Sprint(ukVal))
+				if err := wb.Set(key, data); err != nil {
 					return err
 				}
 			}
@@ -227,7 +229,8 @@ func (s *BadgerStore) applyOp(wb *badgerdb.WriteBatch, op store.Operation, aggDe
 		}
 		if hasSchema && schema.TableType == types.TableTypeUnique && schema.UniqueKey != "" {
 			if ukVal, ok := op.Data[schema.UniqueKey]; ok {
-				if err := wb.Delete(unqKey(op.Table, fmt.Sprint(ukVal))); err != nil {
+				key := s.buildUnqKey(op, &schema, fmt.Sprint(ukVal))
+				if err := wb.Delete(key); err != nil {
 					return err
 				}
 			}
@@ -240,6 +243,15 @@ func (s *BadgerStore) applyOp(wb *badgerdb.WriteBatch, op store.Operation, aggDe
 	}
 
 	return nil
+}
+
+// buildUnqKey returns the unique index key, using a composite key for shared tables.
+func (s *BadgerStore) buildUnqKey(op store.Operation, schema *types.TableSchema, uniqueVal string) []byte {
+	if schema.SharedTable {
+		contractAddr := fmt.Sprint(op.Data["contract_address"])
+		return []byte(fmt.Sprintf("%s%s:%s:%s", prefixUnq, op.Table, contractAddr, uniqueVal))
+	}
+	return unqKey(op.Table, uniqueVal)
 }
 
 // applyAggDeltas reads the current aggregation, applies all deltas, and writes once.

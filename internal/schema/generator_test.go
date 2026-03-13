@@ -51,7 +51,7 @@ func TestBuildSchemas_ExplicitEvents(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry, nil)
 
 	if len(schemas) != 1 {
 		t.Fatalf("expected 1 schema, got %d", len(schemas))
@@ -82,7 +82,7 @@ func TestBuildSchemas_Wildcard(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef, mintDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef, mintDef}}, registry, nil)
 
 	if len(schemas) != 3 {
 		t.Fatalf("expected 3 schemas (wildcard), got %d", len(schemas))
@@ -111,7 +111,7 @@ func TestBuildSchemas_WildcardWithOverride(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, approvalDef}}, registry, nil)
 
 	if len(schemas) != 2 {
 		t.Fatalf("expected 2 schemas, got %d", len(schemas))
@@ -151,7 +151,7 @@ func TestBuildSchemas_WildcardWithAggregationOverride(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, volumeDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef, volumeDef}}, registry, nil)
 
 	if schemas["VolumeUpdate"].TableType != types.TableTypeAggregation {
 		t.Fatal("expected VolumeUpdate to be aggregation type")
@@ -182,7 +182,7 @@ func TestBuildSchemas_NoEventsConfigured(t *testing.T) {
 		Events:  []config.EventConfig{},
 	}
 
-	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry, nil)
 
 	if len(schemas) != 0 {
 		t.Fatalf("expected 0 schemas with no events configured, got %d", len(schemas))
@@ -201,7 +201,7 @@ func TestBuildSchemas_NonexistentEventIgnored(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry)
+	schemas := BuildSchemas(&cc, &abi.ABI{Events: []*abi.EventDef{transferDef}}, registry, nil)
 
 	if len(schemas) != 0 {
 		t.Fatalf("expected 0 schemas for nonexistent event, got %d", len(schemas))
@@ -214,7 +214,7 @@ func TestBuildTableSchema_TableName(t *testing.T) {
 	ev := simpleEventDef("Transfer")
 	ec := config.EventConfig{Name: "Transfer", Table: config.TableConfig{Type: "log"}}
 
-	schema := BuildTableSchema("MyToken", ev, ec)
+	schema := BuildTableSchema("MyToken", ev, ec, nil)
 
 	if schema.Name != "mytoken_transfer" {
 		t.Fatalf("expected lowercase table name 'mytoken_transfer', got '%s'", schema.Name)
@@ -231,7 +231,7 @@ func TestBuildTableSchema_MetadataColumns(t *testing.T) {
 	ev := simpleEventDef("Transfer")
 	ec := config.EventConfig{Name: "Transfer", Table: config.TableConfig{Type: "log"}}
 
-	schema := BuildTableSchema("mytoken", ev, ec)
+	schema := BuildTableSchema("mytoken", ev, ec, nil)
 
 	colNames := make(map[string]string)
 	for _, col := range schema.Columns {
@@ -268,7 +268,7 @@ func TestBuildTableSchema_EventColumns(t *testing.T) {
 	)
 	ec := config.EventConfig{Name: "Transfer", Table: config.TableConfig{Type: "log"}}
 
-	schema := BuildTableSchema("token", ev, ec)
+	schema := BuildTableSchema("token", ev, ec, nil)
 
 	colMap := make(map[string]string)
 	for _, col := range schema.Columns {
@@ -301,7 +301,7 @@ func TestBuildTableSchema_UniqueTable(t *testing.T) {
 		},
 	}
 
-	schema := BuildTableSchema("game", ev, ec)
+	schema := BuildTableSchema("game", ev, ec, nil)
 
 	if schema.TableType != types.TableTypeUnique {
 		t.Fatalf("expected unique table type, got %v", schema.TableType)
@@ -325,7 +325,7 @@ func TestBuildTableSchema_AggregationTable(t *testing.T) {
 		},
 	}
 
-	schema := BuildTableSchema("dex", ev, ec)
+	schema := BuildTableSchema("dex", ev, ec, nil)
 
 	if schema.TableType != types.TableTypeAggregation {
 		t.Fatalf("expected aggregation table type, got %v", schema.TableType)
@@ -622,7 +622,7 @@ func TestFullPipeline_WildcardWithMixedTypes(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&cc, contractABI, registry)
+	schemas := BuildSchemas(&cc, contractABI, registry, nil)
 
 	// All 4 events should have schemas.
 	if len(schemas) != 4 {

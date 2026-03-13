@@ -67,7 +67,8 @@ func Validate(cfg *Config) error {
 		return fieldError("contracts", "at least one contract is required")
 	}
 
-	for i, c := range cfg.Contracts {
+	for i := range cfg.Contracts {
+		c := &cfg.Contracts[i]
 		prefix := fmt.Sprintf("contracts[%d]", i)
 		if c.Name == "" {
 			return fieldError(prefix+".name", "required")

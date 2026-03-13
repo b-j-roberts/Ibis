@@ -66,6 +66,9 @@ type ContractConfig struct {
 
 	// FactoryMeta stores additional fields from the factory event (e.g., token0, token1).
 	FactoryMeta map[string]any `yaml:"-" json:"factory_meta,omitempty"`
+
+	// SharedTables indicates this child contract writes to shared factory tables.
+	SharedTables bool `yaml:"-" json:"shared_tables,omitempty"`
 }
 
 // FactoryConfig defines factory contract indexing settings.

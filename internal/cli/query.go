@@ -132,7 +132,8 @@ func listTables(cmd *cobra.Command, cfg *config.Config) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Available tables:")
 	fmt.Fprintln(out)
-	for _, c := range cfg.Contracts {
+	for i := range cfg.Contracts {
+		c := &cfg.Contracts[i]
 		fmt.Fprintf(out, "  %s (%s)\n", c.Name, c.Address)
 		for _, ev := range c.Events {
 			if ev.Name == "*" {

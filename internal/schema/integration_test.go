@@ -77,7 +77,7 @@ func TestIntegration_STRKContractSchemaGeneration(t *testing.T) {
 		},
 	}
 
-	schemas := BuildSchemas(&wildcardCC, contractABI, registry)
+	schemas := BuildSchemas(&wildcardCC, contractABI, registry, nil)
 	t.Logf("Generated %d schemas from wildcard", len(schemas))
 
 	if len(schemas) != len(contractABI.Events) {
@@ -129,7 +129,7 @@ func TestIntegration_STRKContractSchemaGeneration(t *testing.T) {
 			},
 		}
 
-		overrideSchemas := BuildSchemas(&overrideCC, contractABI, registry)
+		overrideSchemas := BuildSchemas(&overrideCC, contractABI, registry, nil)
 
 		if overrideSchemas["Transfer"].TableType != types.TableTypeUnique {
 			t.Fatal("Transfer should be overridden to unique")

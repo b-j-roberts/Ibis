@@ -401,6 +401,7 @@
 - Follow the asdf plugin creation guide
 - Binaries come from the GitHub release workflow (goreleaser)
 - Plugin should verify checksums on download
+- Create the asdf plugin repo at ../ibis-asdf
 
 ### 3.4 Contract Groups & Namespacing
 

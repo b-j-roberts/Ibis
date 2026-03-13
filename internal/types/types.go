@@ -60,13 +60,14 @@ type AggregateSpec struct {
 
 // TableSchema defines an ABI-derived table.
 type TableSchema struct {
-	Name       string
-	Contract   string
-	Event      string
-	TableType  TableType
-	Columns    []Column
-	UniqueKey  string          // For unique tables
-	Aggregates []AggregateSpec // For aggregation tables
+	Name        string
+	Contract    string
+	Event       string
+	TableType   TableType
+	Columns     []Column
+	UniqueKey   string          // For unique tables
+	Aggregates  []AggregateSpec // For aggregation tables
+	SharedTable bool            // Whether this is a factory shared table (multiple contracts write to same table)
 }
 
 // IndexedEvent is a decoded, stored event.

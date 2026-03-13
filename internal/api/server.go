@@ -153,8 +153,8 @@ func (s *Server) RemoveSchemas(contractName string) {
 		}
 	}
 	// Remove from contracts list.
-	for i, c := range s.contracts {
-		if c.Name == contractName {
+	for i := range s.contracts {
+		if s.contracts[i].Name == contractName {
 			s.contracts = append(s.contracts[:i], s.contracts[i+1:]...)
 			break
 		}

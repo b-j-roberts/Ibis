@@ -58,8 +58,20 @@ func GenerateCreateTableSQL(schema *types.TableSchema) string {
 
 	// Unique index for unique tables.
 	if schema.TableType == types.TableTypeUnique && schema.UniqueKey != "" {
-		b.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_unique_%s ON %s (%s);\n",
-			schema.Name, schema.UniqueKey, schema.Name, schema.UniqueKey))
+		if schema.SharedTable {
+			// Composite unique constraint: (contract_address, unique_key).
+			b.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_unique_%s ON %s (contract_address, %s);\n",
+				schema.Name, schema.UniqueKey, schema.Name, schema.UniqueKey))
+		} else {
+			b.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_unique_%s ON %s (%s);\n",
+				schema.Name, schema.UniqueKey, schema.Name, schema.UniqueKey))
+		}
+	}
+
+	// Index on contract_address for efficient per-child filtering in shared tables.
+	if schema.SharedTable {
+		b.WriteString(fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_contract ON %s (contract_address);\n",
+			schema.Name, schema.Name))
 	}
 
 	// Status index for filtering by confirmation status.

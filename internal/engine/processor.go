@@ -50,6 +50,7 @@ func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error
 	decoded["timestamp"] = uint64(0) // Populated from block data when available.
 	decoded["event_name"] = eventDef.Name
 	decoded["contract_address"] = raw.ContractAddress.String()
+	decoded["contract_name"] = cs.config.Name
 	if raw.TransactionHash != nil {
 		decoded["transaction_hash"] = raw.TransactionHash.String()
 	}

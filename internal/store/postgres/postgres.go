@@ -202,15 +202,25 @@ func (s *PostgresStore) insertRow(ctx context.Context, tx pgx.Tx, op store.Opera
 
 	// For unique tables, use ON CONFLICT to upsert.
 	if hasSchema && sch.TableType == types.TableTypeUnique && sch.UniqueKey != "" {
+		// Shared tables use composite unique key: (contract_address, unique_key).
+		conflictCols := sch.UniqueKey
+		if sch.SharedTable {
+			conflictCols = "contract_address, " + sch.UniqueKey
+		}
+
 		setClauses := make([]string, 0, len(cols))
 		for _, col := range cols {
-			if col != sch.UniqueKey {
-				setClauses = append(setClauses, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
+			if col == sch.UniqueKey {
+				continue
 			}
+			if sch.SharedTable && col == "contract_address" {
+				continue
+			}
+			setClauses = append(setClauses, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
 		}
 		if len(setClauses) > 0 {
 			query += fmt.Sprintf(" ON CONFLICT (%s) DO UPDATE SET %s",
-				sch.UniqueKey, strings.Join(setClauses, ", "))
+				conflictCols, strings.Join(setClauses, ", "))
 		}
 	}
 
@@ -542,8 +552,17 @@ func (s *PostgresStore) generateCreateTableDDL(sch *types.TableSchema) string {
 			sch.Name, sch.Name))
 	}
 	if sch.TableType == types.TableTypeUnique && sch.UniqueKey != "" && colSet[sch.UniqueKey] {
-		b.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_unique_%s ON %s (%s);\n",
-			sch.Name, sch.UniqueKey, sch.Name, sch.UniqueKey))
+		if sch.SharedTable {
+			b.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_unique_%s ON %s (contract_address, %s);\n",
+				sch.Name, sch.UniqueKey, sch.Name, sch.UniqueKey))
+		} else {
+			b.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_unique_%s ON %s (%s);\n",
+				sch.Name, sch.UniqueKey, sch.Name, sch.UniqueKey))
+		}
+	}
+	if sch.SharedTable && colSet["contract_address"] {
+		b.WriteString(fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_contract ON %s (contract_address);\n",
+			sch.Name, sch.Name))
 	}
 	if colSet["status"] {
 		b.WriteString(fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_status ON %s (status);\n",
