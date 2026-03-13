@@ -353,38 +353,147 @@
 
 ### 3.1 Natural Language Queries
 
-**Description**: Enable users to query indexed data using natural language via a Claude Code skill. Users can ask questions like "who has the highest score?" or "show me all trades above 1000 STRK in the last hour" and get results.
+**Description**: Enable users to query indexed data using natural language via a Claude Code skill. Users can ask questions like "who has the highest score?" or "show me all trades above 1000 STRK in the last hour" and get results. The skill must understand the full `ibis query` CLI, REST API, and all table types to translate natural language into precise queries.
 
 **Requirements**:
 - [ ] Claude Code skill that understands available tables, schemas, and column types
-- [ ] Translates natural language to `ibis query` commands or direct API calls
+- [ ] Translates natural language to `ibis query` commands or direct REST API calls
 - [ ] Returns formatted results with context
 - [ ] Handles follow-up questions with conversation context
 - [ ] Skill can inspect `ibis.config.yaml` to understand the indexed data model
+- [ ] Supports all three table types: `log` (append-only events), `unique` (last-write-wins by key), `aggregation` (auto-computed sums/counts/averages)
+- [ ] Supports factory-aware queries: listing child contracts (`--children`), counting children (`--children-count`), filtering shared tables by child address (`--contract-address`)
+- [ ] Understands metadata columns always present on events: `block_number`, `transaction_hash`, `log_index`, `timestamp`, `contract_address`, `event_name`, `status` (PRE_CONFIRMED|ACCEPTED_L2|ACCEPTED_L1), and `contract_name` (on shared tables)
 
 **Implementation Notes**:
 - Build as a Claude Code skill (not embedded in the ibis binary)
 - Skill reads and/or queries the config and schema to understand what data is available
-- Generates `ibis query` commands with appropriate filters
-- Can also hit the REST API if the server is running
+- Skill can be used outside of context of ibis project (from another project using ibis executable) and can still build intelligent queries for all use cases
+- **CLI query command** (`ibis query [contract] [event]`) supports these flags:
+  - `--limit N` (default 50), `--offset N` (default 0) — pagination
+  - `--order field.asc|desc` (default `block_number.desc`) — ordering by any column
+  - `--filter "field=op.value"` (repeatable, AND semantics) — operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`; bare `field=value` defaults to `eq`
+  - `--unique` — query unique table entries (last-write-wins by unique_key)
+  - `--aggregate` — query aggregation results (returns computed values, not individual events)
+  - `--latest` — return only the most recent event
+  - `--count` — return count of matching events
+  - `--children` — list factory child contracts (usage: `ibis query <factory> --children`)
+  - `--children-count` — count factory child contracts
+  - `--contract-address 0x...` — filter shared factory tables by specific child contract address
+  - `--format json|table|csv` (default `json`) — output format
+  - `--list` — list all available tables/events from config
+- **REST API endpoints** (when server is running via `ibis run`):
+  - `GET /v1/{contract}/{event}` — list events with `?limit=`, `?offset=`, `?order=field.dir`, `?field=op.value` filters
+  - `GET /v1/{contract}/{event}/latest` — get most recent event
+  - `GET /v1/{contract}/{event}/count` — count matching events
+  - `GET /v1/{contract}/{event}/unique` — unique table entries
+  - `GET /v1/{contract}/{event}/aggregate` — aggregation results (`{values: {column: value}}`)
+  - `GET /v1/{contract}/{event}/stream` — SSE real-time stream (supports Last-Event-ID for replay)
+  - `GET /v1/{factory}/children` — list child contracts with metadata (name, address, deployment_block, current_block, events, plus factory event fields like token0/token1)
+  - `GET /v1/{factory}/children/count` — count factory children
+  - `GET /v1/status` — indexer status (block heights, sync progress)
+- **Query syntax** follows Supabase-style: `?field=op.value` (e.g., `?block_number=gte.100000&status=eq.ACCEPTED_L2`)
+- Table names are derived as `lowercase({contract}_{event})` — skill should construct these from config
+- Factory children queries support metadata filtering (e.g., `--filter "token0=eq.0x053c91..."` or `?token0=eq.0x053c91...`)
+- For shared tables, multiple factory children write to the same table — use `--contract-address` or `?contract_address=eq.0x...` to filter by specific child
+
 
 ### 3.2 AI-Powered Config Generation
 
-**Description**: A Claude Code skill that generates `ibis.config.yaml` from a contract address or natural language description. "Index all swap events from this AMM contract" -> full config file.
+**Description**: A Claude Code skill that generates `ibis.config.yaml` from a contract address or natural language description. "Index all swap events from this AMM contract" -> full config file. The skill must understand the complete config schema including factory contracts, shared tables, all table types, and ABI resolution strategies.
 
 **Requirements**:
 - [ ] Claude Code skill that accepts a contract address and network
-- [ ] Fetches and analyzes the contract ABI
+- [ ] Fetches and analyzes the contract ABI (supports Cairo types: felt252, u8-u256, i8-i128, bool, ContractAddress, ClassHash, ByteArray, Array/Span, structs, enums)
 - [ ] Suggests which events to index based on event names and data structures
-- [ ] Recommends table types (log vs unique vs aggregation) based on event semantics
-- [ ] Generates complete `ibis.config.yaml`
-- [ ] Supports iterative refinement ("also add the Transfer events", "make the price table unique by pair_id")
-- [ ] If skill used inside contract dir, potentially inspect contract code to gain deeper understanding and provide enhanced recommendations
+- [ ] Recommends table types: `log` (append-only history), `unique` (last-write-wins, requires `unique_key` field), `aggregation` (auto-computed, requires `aggregate` config with `column`/`operation`/`field`)
+- [ ] Supports aggregation operations: `sum`, `count`, `avg` — skill should recommend appropriate aggregations based on numeric fields
+- [ ] Generates complete `ibis.config.yaml` with all sections: `network`, `rpc`, `database`, `api`, `indexer`, `contracts`
+- [ ] Supports iterative refinement ("also add the Transfer events", "make the price table unique by pair_id", "add a factory for this AMM")
+- [ ] Detects factory patterns and generates full factory configuration: `factory.event`, `child_address_field`, `child_abi`, `child_events`, `shared_tables`, `child_name_template`
+- [ ] If skill used inside a contract directory, inspects contract source code for deeper understanding and enhanced recommendations
+- [ ] Supports wildcard events (`name: "*"`) for indexing all ABI events with a single table type
 
 **Implementation Notes**:
 - Build as a Claude Code skill that calls the Starknet RPC to fetch ABIs
-- Use event naming conventions to infer table types (e.g., "Updated" -> unique, "Created" -> log)
+- Use event naming conventions to infer table types (e.g., "Updated"/"Changed" → unique, "Created"/"Emitted" → log, volume/count fields → aggregation)
 - Skill can run `ibis init` under the hood or generate the YAML directly
+- Skill can be used outside of context of ibis project (from another project using ibis executable) and can still generate configs for all use cases
+- **Full config schema** the skill must be able to generate:
+  ```yaml
+  network: mainnet|sepolia|custom
+  rpc: wss://... or https://...          # WSS preferred (enables starknet_subscribeEvents), HTTP falls back to polling
+
+  database:
+    backend: postgres|badger|memory      # postgres for production, badger for embedded, memory for testing
+    postgres:
+      host: localhost
+      port: 5432                         # default
+      user: ibis
+      password: ${IBIS_DB_PASSWORD}      # env var expansion with ${VAR_NAME} syntax
+      name: ibis
+    badger:
+      path: ./data/ibis                  # default
+
+  api:
+    host: 0.0.0.0                        # default
+    port: 8080                           # default
+    cors_origins: ["*"]                  # optional CORS allow list
+    admin_key: ${ADMIN_KEY}              # optional, required for /v1/admin/* endpoints
+
+  indexer:
+    start_block: 0                       # 0 = latest block, or specific block number
+    pending_blocks: true                 # index pre-confirmed (pending) blocks
+    batch_size: 10                       # blocks per backfill query (default)
+
+  contracts:
+    - name: MyContract                   # unique identifier, used in API paths and table names
+      address: "0x049d..."               # Starknet contract address
+      abi: fetch|./path/to/abi.json|Name # resolution: fetch from chain, file path, or smart local discovery
+      start_block: 0                     # optional per-contract override (each contract gets independent cursor)
+
+      events:
+        - name: Transfer                 # specific event name, or "*" for all ABI events
+          table:
+            type: log                    # append-only event log
+        - name: LeaderboardUpdate
+          table:
+            type: unique
+            unique_key: player_address   # field for last-write-wins deduplication
+        - name: VolumeUpdate
+          table:
+            type: aggregation
+            aggregate:
+              - column: total_volume     # output column name
+                operation: sum           # sum|count|avg
+                field: amount            # source event field
+
+      # Factory configuration (optional — for contracts that deploy child contracts)
+      factory:
+        event: PairCreated               # factory event that signals child deployment
+        child_address_field: pair         # event field containing deployed child address
+        child_abi: fetch|path|Name       # ABI for children (cached after first resolution)
+        shared_tables: true              # all children write to same tables (adds contract_name column)
+        child_name_template: "{factory}_{short_address}"  # supports {factory}, {short_address}, {event_field_names}
+        child_events:                    # event/table config template applied to each child
+          - name: "*"
+            table:
+              type: log
+          - name: Swap
+            table:
+              type: aggregation
+              aggregate:
+                - column: total_volume
+                  operation: sum
+                  field: amount_in
+  ```
+- **ABI resolution priority**: 1) explicit file path, 2) smart local discovery (searches `target/dev/` for matching contract names), 3) fetch from chain via RPC
+- **Per-contract cursors**: each contract (including factory children) tracks its own last-processed block independently, enabling targeted backfill at different rates
+- **Factory children** get their deployment block as `start_block` and their own cursor for independent catch-up
+- **Shared tables**: when `shared_tables: true`, children write to factory-named tables (e.g., `uniswapv2factory_swap` instead of `pair_abc123_swap`); each row includes a `contract_name` column identifying the child
+- **Dynamic contract registration**: contracts can also be added at runtime via `POST /v1/admin/contracts` — the skill should note this capability but focus on config file generation
+- Metadata columns are auto-added to all tables: `block_number`, `transaction_hash`, `log_index`, `timestamp`, `contract_address`, `event_name`, `status`
+
 
 ### 3.3 asdf Plugin
 
@@ -739,6 +848,29 @@
 - The existing `EventBus` (used for SSE) is a separate concern -- forward tables use their own delivery path. An event can be both forwarded (via a `forward` table entry) and stored (via a separate `log`/`unique`/`aggregation` entry for the same event) if the user configures both.
 - Jitter implementation: `delay = baseDelay * 2^attempt * (0.5 + rand.Float64()*0.5)` (equal jitter).
 - Consider adding a `/v1/status` field showing forward table health (events forwarded, failed, queued) for observability.
+
+### 3.17 Ibis Query CLI --watch Mode (SSE Streaming)
+
+**Description**: Add a `--watch` flag to `ibis query` that connects to the running ibis API server's SSE endpoint and streams new events to the terminal in real-time. This turns `ibis query` into a live tail for indexed events -- like `tail -f` for on-chain data. Instead of querying the database directly, `--watch` acts as an SSE client connecting to the `/v1/{contract}/{event}/stream` endpoint served by `ibis run`.
+
+**Requirements**:
+- [ ] Add `--watch` / `-w` boolean flag to the `queryCmd` in `internal/cli/query.go`
+- [ ] Add `--api-url` string flag (default: derived from config's `api.host` and `api.port`, e.g., `http://localhost:8080`) to specify the ibis API server URL
+- [ ] When `--watch` is set, construct the SSE URL: `{api-url}/v1/{contract}/{event}/stream` with query params from `--filter` and `--contract-address` flags translated to Supabase-style query params (e.g., `?block_number=gte.100&contract_address=eq.0x123`)
+- [ ] Implement SSE client using Go stdlib (`net/http` + `bufio.Scanner`): parse `id:` and `data:` lines from the `text/event-stream` response, unmarshal JSON data into event objects
+- [ ] Output each received event using the existing `--format` flag: `json` (one JSON object per line, newline-delimited), `table` (print header once, then one row per event), `csv` (print header once, then one row per event)
+- [ ] Auto-reconnect on connection loss with exponential backoff (1s, 2s, 4s, 8s, max 30s). Send `Last-Event-ID` header on reconnect to resume from the last received event. Print a warning line (to stderr) on disconnect and reconnect
+- [ ] Clean shutdown on SIGINT/SIGTERM: close the HTTP response body gracefully, print a summary line (events received count) to stderr, and exit 0
+- [ ] Mutual exclusivity: `--watch` is incompatible with `--latest`, `--count`, `--aggregate`, `--unique`, `--children`, `--children-count`, and `--list`. Return a clear error if combined
+- [ ] Unit tests: SSE line parser, URL construction from flags, mutual exclusivity validation. Integration test using `httptest.Server` that serves SSE events and verifies the CLI receives and formats them correctly
+
+**Implementation Notes**:
+- The SSE client is intentionally stdlib-only (no `r3labs/sse` or similar) -- the protocol is simple enough (`id: ...\ndata: ...\n\n`) and this avoids adding a dependency. Use `bufio.NewScanner` on the response body with a custom split function or line-by-line reading.
+- API URL derivation: read `cfg.API.Host` and `cfg.API.Port` from the loaded config, construct `http://{host}:{port}`. The `--api-url` flag overrides this entirely. If host is `0.0.0.0`, default to `localhost` for the client URL.
+- For `--format table` and `--format csv` in watch mode, print the header row on first event, then append data rows as events arrive. This differs from one-shot mode where all events are collected before rendering.
+- The reconnect loop should track the last received SSE event ID and send it as `Last-Event-ID` on reconnect. The server's `replayEvents` in `sse.go` already handles this for gap-free delivery.
+- Filter flags map to query params: `--filter "block_number=gte.100"` becomes `?block_number=gte.100`, and `--contract-address 0x123` becomes `?contract_address=eq.0x123`. This matches the Supabase-style filtering already used by the REST endpoints (see `parseFiltersFromURL` in `api/query.go`).
+- Signal handling: use `signal.NotifyContext` with `os.Interrupt` and `syscall.SIGTERM` to get a cancellable context, then pass it to the HTTP request.
 
 ---
 

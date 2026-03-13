@@ -519,6 +519,275 @@ func TestBuildQuery_ContractAddressFlag(t *testing.T) {
 	}
 }
 
+func TestOutputCount(t *testing.T) {
+	cmd := queryCmd
+
+	// JSON format.
+	queryFormat = "json"
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	if err := outputCount(cmd, 42); err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["count"] != float64(42) {
+		t.Errorf("count: got %v, want 42", parsed["count"])
+	}
+
+	// Table format (default text).
+	queryFormat = "table"
+	buf.Reset()
+	cmd.SetOut(&buf)
+	if err := outputCount(cmd, 7); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "Count: 7") {
+		t.Errorf("expected 'Count: 7', got %q", buf.String())
+	}
+}
+
+func TestLatestQuery(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	schema := &types.TableSchema{
+		Name:      "testcontract_transfer",
+		Contract:  "TestContract",
+		Event:     "Transfer",
+		TableType: types.TableTypeLog,
+		Columns: []types.Column{
+			{Name: "block_number", Type: "uint64"},
+			{Name: "event_name", Type: "string"},
+			{Name: "amount", Type: "string"},
+		},
+	}
+	if err := st.CreateTable(ctx, schema); err != nil {
+		t.Fatal(err)
+	}
+
+	ops := []store.Operation{
+		{
+			Type: store.OpInsert, Table: "testcontract_transfer",
+			Key: "100:0", BlockNumber: 100, LogIndex: 0,
+			Data: map[string]any{"block_number": uint64(100), "event_name": "Transfer", "amount": "1000"},
+		},
+		{
+			Type: store.OpInsert, Table: "testcontract_transfer",
+			Key: "200:0", BlockNumber: 200, LogIndex: 0,
+			Data: map[string]any{"block_number": uint64(200), "event_name": "Transfer", "amount": "500"},
+		},
+	}
+	if err := st.ApplyOperations(ctx, ops); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use --latest: should return only 1 event (the most recent).
+	q := store.Query{Limit: 1, OrderBy: "block_number", OrderDir: store.OrderDesc}
+	events, err := st.GetEvents(ctx, "testcontract_transfer", q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Data["block_number"] != uint64(200) {
+		t.Errorf("expected block_number 200, got %v", events[0].Data["block_number"])
+	}
+}
+
+func TestCountQuery(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	schema := &types.TableSchema{
+		Name:      "testcontract_transfer",
+		Contract:  "TestContract",
+		Event:     "Transfer",
+		TableType: types.TableTypeLog,
+		Columns: []types.Column{
+			{Name: "block_number", Type: "uint64"},
+			{Name: "event_name", Type: "string"},
+		},
+	}
+	if err := st.CreateTable(ctx, schema); err != nil {
+		t.Fatal(err)
+	}
+
+	ops := []store.Operation{
+		{
+			Type: store.OpInsert, Table: "testcontract_transfer",
+			Key: "100:0", BlockNumber: 100, LogIndex: 0,
+			Data: map[string]any{"block_number": uint64(100), "event_name": "Transfer"},
+		},
+		{
+			Type: store.OpInsert, Table: "testcontract_transfer",
+			Key: "101:0", BlockNumber: 101, LogIndex: 0,
+			Data: map[string]any{"block_number": uint64(101), "event_name": "Transfer"},
+		},
+		{
+			Type: store.OpInsert, Table: "testcontract_transfer",
+			Key: "102:0", BlockNumber: 102, LogIndex: 0,
+			Data: map[string]any{"block_number": uint64(102), "event_name": "Transfer"},
+		},
+	}
+	if err := st.ApplyOperations(ctx, ops); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := st.CountEvents(ctx, "testcontract_transfer", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("expected count=3, got %d", count)
+	}
+}
+
+func TestFactoryChildrenQuery(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	// Save two dynamic contracts as factory children.
+	child1 := &config.ContractConfig{
+		Name:        "MyFactory_pair_0x111",
+		Address:     "0x111",
+		StartBlock:  100,
+		FactoryName: "MyFactory",
+		FactoryMeta: map[string]any{"token0": "0xAAA", "token1": "0xBBB"},
+		Events:      []config.EventConfig{{Name: "Swap"}},
+	}
+	child2 := &config.ContractConfig{
+		Name:        "MyFactory_pair_0x222",
+		Address:     "0x222",
+		StartBlock:  200,
+		FactoryName: "MyFactory",
+		FactoryMeta: map[string]any{"token0": "0xCCC", "token1": "0xDDD"},
+		Events:      []config.EventConfig{{Name: "Swap"}},
+	}
+	// A child of a different factory (should not appear).
+	other := &config.ContractConfig{
+		Name:        "OtherFactory_pair_0x333",
+		Address:     "0x333",
+		StartBlock:  300,
+		FactoryName: "OtherFactory",
+		Events:      []config.EventConfig{{Name: "Trade"}},
+	}
+
+	for _, cc := range []*config.ContractConfig{child1, child2, other} {
+		if err := st.SaveDynamicContract(ctx, cc); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Set cursors.
+	_ = st.SetCursor(ctx, child1.Name, 150)
+	_ = st.SetCursor(ctx, child2.Name, 210)
+
+	// Get dynamic contracts and filter by factory.
+	allContracts, err := st.GetDynamicContracts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var children []map[string]any
+	for i := range allContracts {
+		cc := &allContracts[i]
+		if cc.FactoryName != "MyFactory" {
+			continue
+		}
+		cursor, _ := st.GetCursor(ctx, cc.Name)
+		entry := map[string]any{
+			"name":             cc.Name,
+			"address":          cc.Address,
+			"deployment_block": cc.StartBlock,
+			"current_block":    cursor,
+			"events":           len(cc.Events),
+		}
+		for k, v := range cc.FactoryMeta {
+			entry[k] = v
+		}
+		children = append(children, entry)
+	}
+
+	if len(children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(children))
+	}
+
+	// Verify metadata promoted to top-level.
+	found := false
+	for _, child := range children {
+		if child["address"] == "0x111" {
+			if child["token0"] != "0xAAA" {
+				t.Errorf("expected token0=0xAAA, got %v", child["token0"])
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Error("child 0x111 not found")
+	}
+}
+
+func TestMatchChildFilters(t *testing.T) {
+	entry := map[string]any{
+		"name":    "pair_0x111",
+		"address": "0x111",
+		"token0":  "0xAAA",
+		"token1":  "0xBBB",
+	}
+
+	// Match on token0.
+	if !matchChildFilters(entry, []store.Filter{{Field: "token0", Operator: "eq", Value: "0xAAA"}}) {
+		t.Error("expected match on token0=0xAAA")
+	}
+
+	// No match.
+	if matchChildFilters(entry, []store.Filter{{Field: "token0", Operator: "eq", Value: "0xCCC"}}) {
+		t.Error("expected no match on token0=0xCCC")
+	}
+
+	// neq match.
+	if !matchChildFilters(entry, []store.Filter{{Field: "token0", Operator: "neq", Value: "0xCCC"}}) {
+		t.Error("expected match on token0 neq 0xCCC")
+	}
+
+	// Missing field.
+	if matchChildFilters(entry, []store.Filter{{Field: "missing", Operator: "eq", Value: "x"}}) {
+		t.Error("expected no match on missing field")
+	}
+}
+
+func TestCollectMapColumns(t *testing.T) {
+	entries := []map[string]any{
+		{"name": "a", "address": "0x1", "token0": "0xA"},
+		{"name": "b", "address": "0x2", "deployment_block": uint64(100), "token1": "0xB"},
+	}
+
+	cols := collectMapColumns(entries)
+
+	// Known columns should come first.
+	if cols[0] != "name" {
+		t.Errorf("first column: got %q, want 'name'", cols[0])
+	}
+	if cols[1] != "address" {
+		t.Errorf("second column: got %q, want 'address'", cols[1])
+	}
+
+	// Extra columns should be sorted after known ones.
+	found := false
+	for _, c := range cols {
+		if c == "token0" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected token0 in columns")
+	}
+}
+
 // TestBuildQuery_ContractAddressCombinedWithFilters verifies --contract-address
 // works alongside regular --filter flags.
 func TestBuildQuery_ContractAddressCombinedWithFilters(t *testing.T) {

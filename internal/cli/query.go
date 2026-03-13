@@ -26,6 +26,10 @@ var (
 	queryFilters         []string
 	queryUnique          bool
 	queryAggregate       bool
+	queryLatest          bool
+	queryCount           bool
+	queryChildren        bool
+	queryChildrenCount   bool
 	queryFormat          string
 	queryList            bool
 	queryContractAddress string
@@ -45,9 +49,13 @@ Examples:
   ibis query MyContract Transfer
   ibis query MyContract Transfer --limit 10 --order block_number.asc
   ibis query MyContract Transfer --filter "block_number=gte.100"
+  ibis query MyContract Transfer --latest
+  ibis query MyContract Transfer --count
   ibis query MyFactory Swap --contract-address 0x123...
   ibis query MyContract LeaderboardUpdate --unique
   ibis query MyContract VolumeUpdate --aggregate
+  ibis query MyFactory --children
+  ibis query MyFactory --children-count
   ibis query --list`,
 	Args: cobra.MaximumNArgs(2),
 	RunE: runQuery,
@@ -60,6 +68,10 @@ func init() {
 	queryCmd.Flags().StringArrayVar(&queryFilters, "filter", nil, "field filter (field=value or field=op.value)")
 	queryCmd.Flags().BoolVar(&queryUnique, "unique", false, "query unique table entries")
 	queryCmd.Flags().BoolVar(&queryAggregate, "aggregate", false, "query aggregation results")
+	queryCmd.Flags().BoolVar(&queryLatest, "latest", false, "return only the most recent event")
+	queryCmd.Flags().BoolVar(&queryCount, "count", false, "return count of matching events")
+	queryCmd.Flags().BoolVar(&queryChildren, "children", false, "list factory child contracts")
+	queryCmd.Flags().BoolVar(&queryChildrenCount, "children-count", false, "count factory child contracts")
 	queryCmd.Flags().StringVar(&queryFormat, "format", "json", "output format: json, table, csv")
 	queryCmd.Flags().BoolVar(&queryList, "list", false, "list all available tables/events")
 	queryCmd.Flags().StringVar(&queryContractAddress, "contract-address", "", "filter by contract address (for factory shared tables)")
@@ -76,6 +88,14 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Factory children queries only need a contract name.
+	if queryChildren || queryChildrenCount {
+		if len(args) < 1 {
+			return fmt.Errorf("usage: ibis query <factory> --children")
+		}
+		return runFactoryChildrenQuery(cmd, cfg, args[0])
+	}
+
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ibis query <contract> <event>\n  use --list to see available tables")
 	}
@@ -85,18 +105,9 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	tableName := strings.ToLower(contractName + "_" + eventName)
 
 	// Connect to store.
-	var st store.Store
-	if testCreateStoreOverride != nil {
-		st = testCreateStoreOverride()
-	} else {
-		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelWarn,
-		}))
-		var storeErr error
-		st, storeErr = createStore(cfg, logger)
-		if storeErr != nil {
-			return fmt.Errorf("opening database: %w", storeErr)
-		}
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
 	}
 	defer st.Close()
 
@@ -109,6 +120,37 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("aggregation query failed: %w", err)
 		}
 		return outputAggregation(cmd, result)
+	}
+
+	// Count-only query.
+	if queryCount {
+		filters, err := parseAllFilters()
+		if err != nil {
+			return err
+		}
+		count, err := st.CountEvents(ctx, tableName, filters)
+		if err != nil {
+			return fmt.Errorf("count query failed: %w", err)
+		}
+		return outputCount(cmd, count)
+	}
+
+	// Latest event query.
+	if queryLatest {
+		q := store.Query{
+			Limit:    1,
+			OrderBy:  "block_number",
+			OrderDir: store.OrderDesc,
+		}
+		events, err := st.GetEvents(ctx, tableName, q)
+		if err != nil {
+			return fmt.Errorf("query failed: %w", err)
+		}
+		if len(events) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "No results found.")
+			return nil
+		}
+		return outputEvents(cmd, events[:1])
 	}
 
 	// Build query from flags.
@@ -129,6 +171,222 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	return outputEvents(cmd, events)
+}
+
+// openStore creates a store connection from config, using the test override if set.
+func openStore(cfg *config.Config) (store.Store, error) {
+	if testCreateStoreOverride != nil {
+		return testCreateStoreOverride(), nil
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	}))
+	st, err := createStore(cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("opening database: %w", err)
+	}
+	return st, nil
+}
+
+// parseAllFilters parses --filter flags and --contract-address into a flat filter slice.
+func parseAllFilters() ([]store.Filter, error) {
+	var filters []store.Filter
+	for _, f := range queryFilters {
+		filter, err := parseFilterFlag(f)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, filter)
+	}
+	if queryContractAddress != "" {
+		filters = append(filters, store.Filter{
+			Field:    "contract_address",
+			Operator: "eq",
+			Value:    queryContractAddress,
+		})
+	}
+	return filters, nil
+}
+
+// runFactoryChildrenQuery lists or counts factory child contracts from the store.
+func runFactoryChildrenQuery(cmd *cobra.Command, cfg *config.Config, factoryName string) error {
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+
+	// Get all dynamic contracts and filter to the given factory.
+	allContracts, err := st.GetDynamicContracts(ctx)
+	if err != nil {
+		return fmt.Errorf("loading dynamic contracts: %w", err)
+	}
+
+	// Parse metadata filters from --filter flags.
+	filters, fErr := parseAllFilters()
+	if fErr != nil {
+		return fErr
+	}
+
+	var children []map[string]any
+	for i := range allContracts {
+		cc := &allContracts[i]
+		if cc.FactoryName != factoryName {
+			continue
+		}
+		cursor, _ := st.GetCursor(ctx, cc.Name)
+		entry := map[string]any{
+			"name":             cc.Name,
+			"address":          cc.Address,
+			"deployment_block": cc.StartBlock,
+			"current_block":    cursor,
+			"events":           len(cc.Events),
+		}
+		for k, v := range cc.FactoryMeta {
+			entry[k] = v
+		}
+		if len(filters) > 0 && !matchChildFilters(entry, filters) {
+			continue
+		}
+		children = append(children, entry)
+	}
+
+	out := cmd.OutOrStdout()
+
+	if queryChildrenCount {
+		return outputCount(cmd, int64(len(children)))
+	}
+
+	// Output the children list.
+	if len(children) == 0 {
+		fmt.Fprintln(out, "No factory children found.")
+		return nil
+	}
+
+	switch queryFormat {
+	case "json":
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(children)
+	case "table":
+		return outputChildrenTable(out, children)
+	case "csv":
+		return outputChildrenCSV(out, children)
+	default:
+		return fmt.Errorf("unknown format: %s (use json, table, or csv)", queryFormat)
+	}
+}
+
+// matchChildFilters checks if a child entry matches all given filters (eq/neq only).
+func matchChildFilters(entry map[string]any, filters []store.Filter) bool {
+	for _, f := range filters {
+		val, ok := entry[f.Field]
+		if !ok {
+			return false
+		}
+		valStr := fmt.Sprintf("%v", val)
+		filterVal := fmt.Sprintf("%v", f.Value)
+		switch f.Operator {
+		case "eq":
+			if valStr != filterVal {
+				return false
+			}
+		case "neq":
+			if valStr == filterVal {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// outputCount writes a count result in the chosen format.
+func outputCount(cmd *cobra.Command, count int64) error {
+	out := cmd.OutOrStdout()
+	switch queryFormat {
+	case "json":
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]int64{"count": count})
+	default:
+		fmt.Fprintf(out, "Count: %d\n", count)
+		return nil
+	}
+}
+
+// outputChildrenTable writes factory children as a formatted table.
+func outputChildrenTable(out io.Writer, children []map[string]any) error {
+	cols := collectMapColumns(children)
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+
+	fmt.Fprintln(tw, strings.Join(cols, "\t"))
+	seps := make([]string, len(cols))
+	for i, col := range cols {
+		seps[i] = strings.Repeat("-", len(col))
+	}
+	fmt.Fprintln(tw, strings.Join(seps, "\t"))
+
+	for _, entry := range children {
+		vals := make([]string, len(cols))
+		for i, col := range cols {
+			vals[i] = formatValue(entry[col])
+		}
+		fmt.Fprintln(tw, strings.Join(vals, "\t"))
+	}
+	return tw.Flush()
+}
+
+// outputChildrenCSV writes factory children as CSV.
+func outputChildrenCSV(out io.Writer, children []map[string]any) error {
+	cols := collectMapColumns(children)
+	w := csv.NewWriter(out)
+	if err := w.Write(cols); err != nil {
+		return err
+	}
+	for _, entry := range children {
+		row := make([]string, len(cols))
+		for i, col := range cols {
+			row[i] = formatValue(entry[col])
+		}
+		if err := w.Write(row); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
+// collectMapColumns gathers columns from a slice of maps with known columns first.
+func collectMapColumns(entries []map[string]any) []string {
+	knownOrder := []string{"name", "address", "deployment_block", "current_block", "events"}
+	knownSet := make(map[string]bool, len(knownOrder))
+	for _, k := range knownOrder {
+		knownSet[k] = true
+	}
+
+	seen := make(map[string]bool)
+	var extra []string
+	for _, entry := range entries {
+		for k := range entry {
+			if !seen[k] {
+				seen[k] = true
+				if !knownSet[k] {
+					extra = append(extra, k)
+				}
+			}
+		}
+	}
+	sort.Strings(extra)
+
+	var cols []string
+	for _, k := range knownOrder {
+		if seen[k] {
+			cols = append(cols, k)
+		}
+	}
+	return append(cols, extra...)
 }
 
 func listTables(cmd *cobra.Command, cfg *config.Config) {
