@@ -141,6 +141,16 @@ func (p *StarknetProvider) GetEvents(ctx context.Context, opts GetEventsOptions)
 	return allEvents, nil
 }
 
+// Call executes a read-only function call on a Starknet contract.
+// Returns the raw felt array result from starknet_call.
+func (p *StarknetProvider) Call(ctx context.Context, contractAddress *felt.Felt, entryPointSelector *felt.Felt, calldata []*felt.Felt, blockID rpc.BlockID) ([]*felt.Felt, error) {
+	return p.httpRPC.Call(ctx, rpc.FunctionCall{
+		ContractAddress:    contractAddress,
+		EntryPointSelector: entryPointSelector,
+		Calldata:           calldata,
+	}, blockID)
+}
+
 // ClassAt fetches the contract class at the given address.
 // Satisfies the config.ABIFetcher interface for chain-based ABI resolution.
 func (p *StarknetProvider) ClassAt(ctx context.Context, blockID rpc.BlockID, contractAddress *felt.Felt) (rpc.ClassOutput, error) {

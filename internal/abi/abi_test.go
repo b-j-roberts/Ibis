@@ -836,6 +836,264 @@ func TestDecodeEmptyKeys(t *testing.T) {
 	}
 }
 
+// --- View Function Tests ---
+
+// ABI with view functions for testing.
+const viewFunctionABI = `[
+	{
+		"type": "struct",
+		"name": "core::integer::u256",
+		"members": [
+			{"name": "low", "type": "core::integer::u128"},
+			{"name": "high", "type": "core::integer::u128"}
+		]
+	},
+	{
+		"type": "function",
+		"name": "mycontract::MyContract::get_price",
+		"inputs": [
+			{"name": "asset_id", "type": "core::felt252"}
+		],
+		"outputs": [
+			{"name": "price", "type": "core::integer::u256"},
+			{"name": "timestamp", "type": "core::integer::u64"}
+		],
+		"state_mutability": "view"
+	},
+	{
+		"type": "function",
+		"name": "mycontract::MyContract::total_supply",
+		"inputs": [],
+		"outputs": [
+			{"name": "supply", "type": "core::integer::u256"}
+		],
+		"state_mutability": "view"
+	},
+	{
+		"type": "function",
+		"name": "mycontract::MyContract::transfer",
+		"inputs": [
+			{"name": "to", "type": "core::starknet::contract_address::ContractAddress"},
+			{"name": "amount", "type": "core::integer::u256"}
+		],
+		"outputs": [],
+		"state_mutability": "external"
+	},
+	{
+		"type": "interface",
+		"name": "mycontract::IMyContract",
+		"items": [
+			{
+				"type": "function",
+				"name": "mycontract::IMyContract::get_balance",
+				"inputs": [
+					{"name": "account", "type": "core::starknet::contract_address::ContractAddress"}
+				],
+				"outputs": [
+					{"name": "balance", "type": "core::integer::u256"}
+				],
+				"state_mutability": "view"
+			}
+		]
+	}
+]`
+
+func TestParseViewFunctions(t *testing.T) {
+	parsed, err := Parse([]byte(viewFunctionABI))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should have 3 view functions: get_price, total_supply, get_balance (from interface).
+	// The "transfer" function is external and should be excluded.
+	if len(parsed.Functions) != 3 {
+		t.Fatalf("expected 3 view functions, got %d", len(parsed.Functions))
+	}
+
+	// Check get_price.
+	fn, ok := parsed.Functions["get_price"]
+	if !ok {
+		t.Fatal("get_price function not found")
+	}
+	if fn.StateMutability != "view" {
+		t.Errorf("get_price state_mutability = %q, want view", fn.StateMutability)
+	}
+	if len(fn.Inputs) != 1 {
+		t.Errorf("get_price inputs count = %d, want 1", len(fn.Inputs))
+	}
+	if len(fn.Outputs) != 2 {
+		t.Errorf("get_price outputs count = %d, want 2", len(fn.Outputs))
+	}
+	if fn.Inputs[0].Name != "asset_id" {
+		t.Errorf("get_price input name = %q, want asset_id", fn.Inputs[0].Name)
+	}
+	if fn.Outputs[0].Name != "price" {
+		t.Errorf("get_price output[0] name = %q, want price", fn.Outputs[0].Name)
+	}
+	if fn.Outputs[0].Type.Kind != CairoU256 {
+		t.Errorf("get_price output[0] type = %d, want CairoU256", fn.Outputs[0].Type.Kind)
+	}
+	if fn.Selector == nil {
+		t.Error("get_price selector is nil")
+	}
+
+	// Check total_supply (no inputs).
+	fn, ok = parsed.Functions["total_supply"]
+	if !ok {
+		t.Fatal("total_supply function not found")
+	}
+	if len(fn.Inputs) != 0 {
+		t.Errorf("total_supply inputs count = %d, want 0", len(fn.Inputs))
+	}
+	if len(fn.Outputs) != 1 {
+		t.Errorf("total_supply outputs count = %d, want 1", len(fn.Outputs))
+	}
+
+	// Check get_balance (from interface).
+	fn, ok = parsed.Functions["get_balance"]
+	if !ok {
+		t.Fatal("get_balance function not found (from interface)")
+	}
+	if len(fn.Inputs) != 1 || fn.Inputs[0].Name != "account" {
+		t.Errorf("get_balance input = %+v, want [account]", fn.Inputs)
+	}
+
+	// External function should NOT be in Functions map.
+	if _, ok := parsed.Functions["transfer"]; ok {
+		t.Error("transfer (external) should not be in Functions map")
+	}
+}
+
+func TestDecodeFunctionOutputs_SingleFelt(t *testing.T) {
+	outputs := []FieldDef{
+		{Name: "value", Type: &TypeDef{Kind: CairoFelt252, Name: "core::felt252"}},
+	}
+	felts := []*felt.Felt{feltFromHex("0xdeadbeef")}
+
+	result, err := DecodeFunctionOutputs(outputs, felts)
+	if err != nil {
+		t.Fatalf("DecodeFunctionOutputs failed: %v", err)
+	}
+	if result["value"] != feltFromHex("0xdeadbeef").String() {
+		t.Errorf("value = %v, want 0xdeadbeef hex string", result["value"])
+	}
+}
+
+func TestDecodeFunctionOutputs_U256(t *testing.T) {
+	outputs := []FieldDef{
+		{Name: "supply", Type: &TypeDef{Kind: CairoU256, Name: "core::integer::u256"}},
+	}
+	felts := []*felt.Felt{feltFromUint64(1000), feltFromUint64(0)}
+
+	result, err := DecodeFunctionOutputs(outputs, felts)
+	if err != nil {
+		t.Fatalf("DecodeFunctionOutputs failed: %v", err)
+	}
+	if result["supply"] != "1000" {
+		t.Errorf("supply = %v, want 1000", result["supply"])
+	}
+}
+
+func TestDecodeFunctionOutputs_Multiple(t *testing.T) {
+	outputs := []FieldDef{
+		{Name: "price", Type: &TypeDef{Kind: CairoU256, Name: "core::integer::u256"}},
+		{Name: "timestamp", Type: &TypeDef{Kind: CairoU64, Name: "core::integer::u64"}},
+	}
+	felts := []*felt.Felt{feltFromUint64(42000), feltFromUint64(0), feltFromUint64(1710072000)}
+
+	result, err := DecodeFunctionOutputs(outputs, felts)
+	if err != nil {
+		t.Fatalf("DecodeFunctionOutputs failed: %v", err)
+	}
+	if result["price"] != "42000" {
+		t.Errorf("price = %v, want 42000", result["price"])
+	}
+	if result["timestamp"] != uint64(1710072000) {
+		t.Errorf("timestamp = %v, want 1710072000", result["timestamp"])
+	}
+}
+
+func TestDecodeFunctionOutputs_Empty(t *testing.T) {
+	result, err := DecodeFunctionOutputs(nil, nil)
+	if err != nil {
+		t.Fatalf("DecodeFunctionOutputs failed: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty result, got %d entries", len(result))
+	}
+}
+
+func TestDecodeFunctionOutputs_InsufficientFelts(t *testing.T) {
+	outputs := []FieldDef{
+		{Name: "value", Type: &TypeDef{Kind: CairoU256, Name: "core::integer::u256"}},
+	}
+	felts := []*felt.Felt{feltFromUint64(100)} // Need 2 felts for u256
+
+	_, err := DecodeFunctionOutputs(outputs, felts)
+	if err == nil {
+		t.Fatal("expected error for insufficient felts")
+	}
+}
+
+func TestEncodeFunctionCalldata(t *testing.T) {
+	args := []string{"0xabc", "0x123"}
+	result, err := EncodeFunctionCalldata(args)
+	if err != nil {
+		t.Fatalf("EncodeFunctionCalldata failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 felts, got %d", len(result))
+	}
+	if result[0].String() != feltFromHex("0xabc").String() {
+		t.Errorf("result[0] = %s, want 0xabc", result[0].String())
+	}
+	if result[1].String() != feltFromHex("0x123").String() {
+		t.Errorf("result[1] = %s, want 0x123", result[1].String())
+	}
+}
+
+func TestEncodeFunctionCalldata_Empty(t *testing.T) {
+	result, err := EncodeFunctionCalldata(nil)
+	if err != nil {
+		t.Fatalf("EncodeFunctionCalldata failed: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty result, got %d", len(result))
+	}
+}
+
+func TestEncodeFunctionCalldata_InvalidHex(t *testing.T) {
+	_, err := EncodeFunctionCalldata([]string{"not-hex"})
+	if err == nil {
+		t.Fatal("expected error for non-hex calldata")
+	}
+}
+
+func TestEncodeFunctionCalldata_LargeFelt(t *testing.T) {
+	// A valid felt value (must be < P, the Stark prime ~2^251).
+	args := []string{"0x0454480000000000000000000000000000000000000000000000000000000000"}
+	result, err := EncodeFunctionCalldata(args)
+	if err != nil {
+		t.Fatalf("EncodeFunctionCalldata failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 felt, got %d", len(result))
+	}
+}
+
+func TestFunctionDefSelector(t *testing.T) {
+	parsed, err := Parse([]byte(viewFunctionABI))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	fn := parsed.Functions["get_price"]
+	expected := ComputeSelector("get_price")
+	if !fn.Selector.Equal(expected) {
+		t.Errorf("get_price selector = %s, want %s", fn.Selector.String(), expected.String())
+	}
+}
+
 // --- FeltSize Tests ---
 
 func TestFeltSize(t *testing.T) {

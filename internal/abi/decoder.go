@@ -39,6 +39,22 @@ func DecodeEvent(ev *EventDef, keys, data []*felt.Felt) (map[string]any, error) 
 	return result, nil
 }
 
+// DecodeFunctionOutputs decodes the flat []*felt.Felt return value of a
+// starknet_call into a typed map using the function's output member definitions.
+func DecodeFunctionOutputs(outputs []FieldDef, felts []*felt.Felt) (map[string]any, error) {
+	result := make(map[string]any, len(outputs))
+	offset := 0
+	for _, member := range outputs {
+		val, consumed, err := decodeType(member.Type, felts, offset)
+		if err != nil {
+			return nil, fmt.Errorf("decoding output member %q: %w", member.Name, err)
+		}
+		result[member.Name] = val
+		offset += consumed
+	}
+	return result, nil
+}
+
 // decodeType decodes a value of the given type from felts starting at offset.
 // Returns the decoded value and the number of felts consumed.
 func decodeType(td *TypeDef, felts []*felt.Felt, offset int) (val any, consumed int, err error) {

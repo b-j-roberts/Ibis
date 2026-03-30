@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 var validNetworks = map[string]bool{
@@ -21,6 +22,11 @@ var validTableTypes = map[string]bool{
 	"log":         true,
 	"unique":      true,
 	"aggregation": true,
+}
+
+var validViewTableTypes = map[string]bool{
+	"log":    true,
+	"unique": true,
 }
 
 var validAggOps = map[string]bool{
@@ -97,6 +103,11 @@ func Validate(cfg *Config) error {
 			if err := validateFactory(c.Factory, prefix); err != nil {
 				return err
 			}
+		}
+
+		// Validate view configs if present.
+		if err := validateViews(c.Views, prefix); err != nil {
+			return err
 		}
 	}
 
@@ -210,6 +221,60 @@ func validateDiscover(discovers []DiscoverConfig) error {
 					return fieldError(prefix+".group", "must be lowercase alphanumeric with hyphens only")
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// validateViews validates view function configurations.
+func validateViews(views []ViewConfig, prefix string) error {
+	for j, v := range views {
+		vPrefix := fmt.Sprintf("%s.views[%d]", prefix, j)
+
+		if v.Function == "" {
+			return fieldError(vPrefix+".function", "required")
+		}
+
+		if v.Interval == "" {
+			return fieldError(vPrefix+".interval", "required")
+		}
+		d, err := time.ParseDuration(v.Interval)
+		if err != nil {
+			return fieldError(vPrefix+".interval", fmt.Sprintf("invalid duration: %v", err))
+		}
+		if d < time.Second {
+			return fieldError(vPrefix+".interval", "minimum interval is 1s")
+		}
+
+		if !validViewTableTypes[v.Table.Type] {
+			return fieldError(vPrefix+".table.type", "must be one of: log, unique (aggregation not supported for views)")
+		}
+		if v.Table.Type == "unique" && v.Table.UniqueKey == "" {
+			return fieldError(vPrefix+".table.unique_key", "required when table type is unique")
+		}
+
+		for k, cd := range v.Calldata {
+			cdPrefix := fmt.Sprintf("%s.calldata[%d]", vPrefix, k)
+			if err := validateHexFelt(cd); err != nil {
+				return fieldError(cdPrefix, err.Error())
+			}
+		}
+	}
+	return nil
+}
+
+// validateHexFelt checks that a string is a valid hex felt (0x-prefixed hex string).
+func validateHexFelt(s string) error {
+	if !strings.HasPrefix(s, "0x") {
+		return fmt.Errorf("must start with 0x")
+	}
+	hex := s[2:]
+	if hex == "" || len(hex) > 64 {
+		return fmt.Errorf("hex part must be 1-64 characters")
+	}
+	for _, c := range hex {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return fmt.Errorf("invalid hex character: %c", c)
 		}
 	}
 	return nil

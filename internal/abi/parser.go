@@ -9,8 +9,9 @@ import (
 
 // ABI represents a parsed Cairo contract ABI with resolved types and events.
 type ABI struct {
-	Types  map[string]*TypeDef // Full name -> resolved type definition
-	Events []*EventDef         // All emittable events (struct-kind events)
+	Types     map[string]*TypeDef    // Full name -> resolved type definition
+	Events    []*EventDef            // All emittable events (struct-kind events)
+	Functions map[string]*FunctionDef // Short name -> view function definitions
 }
 
 // ParseFile parses a Cairo ABI from a file path.
@@ -59,7 +60,8 @@ func Parse(data []byte) (*ABI, error) {
 // buildABI resolves raw ABI entries into typed definitions.
 func buildABI(entries []RawABIEntry) (*ABI, error) {
 	abi := &ABI{
-		Types: make(map[string]*TypeDef),
+		Types:     make(map[string]*TypeDef),
+		Functions: make(map[string]*FunctionDef),
 	}
 
 	// Pass 1: Register all struct and enum type skeletons.
@@ -104,14 +106,27 @@ func buildABI(entries []RawABIEntry) (*ABI, error) {
 		}
 	}
 
-	// Pass 3: Extract event definitions.
+	// Pass 3: Extract event and view function definitions.
 	for i := range entries {
 		entry := &entries[i]
-		if entry.Type != "event" || entry.Kind != "struct" {
-			continue
+		if entry.Type == "event" && entry.Kind == "struct" {
+			ev := abi.buildEventDef(entry)
+			abi.Events = append(abi.Events, ev)
 		}
-		ev := abi.buildEventDef(entry)
-		abi.Events = append(abi.Events, ev)
+		if entry.Type == "function" && entry.StateMutability == "view" {
+			fn := abi.buildFunctionDef(entry)
+			abi.Functions[fn.Name] = fn
+		}
+		// Also extract view functions from interface items.
+		if entry.Type == "interface" {
+			for j := range entry.Items {
+				item := &entry.Items[j]
+				if item.Type == "function" && item.StateMutability == "view" {
+					fn := abi.buildFunctionDef(item)
+					abi.Functions[fn.Name] = fn
+				}
+			}
+		}
 	}
 
 	return abi, nil
@@ -140,6 +155,27 @@ func (a *ABI) buildEventDef(entry *RawABIEntry) *EventDef {
 	}
 
 	return ev
+}
+
+// buildFunctionDef creates a FunctionDef from a function ABI entry.
+func (a *ABI) buildFunctionDef(entry *RawABIEntry) *FunctionDef {
+	fn := &FunctionDef{
+		Name:            shortName(entry.Name),
+		FullName:        entry.Name,
+		StateMutability: entry.StateMutability,
+	}
+	fn.Selector = ComputeSelector(fn.Name)
+
+	for _, p := range entry.Inputs {
+		resolved := a.resolveType(p.Type)
+		fn.Inputs = append(fn.Inputs, FieldDef{Name: p.Name, Type: resolved})
+	}
+	for _, p := range entry.Outputs {
+		resolved := a.resolveType(p.Type)
+		fn.Outputs = append(fn.Outputs, FieldDef{Name: p.Name, Type: resolved})
+	}
+
+	return fn
 }
 
 // resolveType resolves a Cairo type string into a TypeDef.

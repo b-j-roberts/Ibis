@@ -85,6 +85,16 @@ type EventDef struct {
 	DataMembers []FieldDef // Members encoded in data[]
 }
 
+// FunctionDef represents a parsed view function definition.
+type FunctionDef struct {
+	Name            string     // Short name (e.g., "get_price")
+	FullName        string     // Full qualified name
+	Selector        *felt.Felt // sn_keccak(Name)
+	Inputs          []FieldDef // Function input parameters
+	Outputs         []FieldDef // Function output parameters
+	StateMutability string     // "view" or "external"
+}
+
 // --- Raw JSON types for parsing Cairo ABI ---
 
 // RawABIEntry represents a single entry in a Cairo ABI JSON array.

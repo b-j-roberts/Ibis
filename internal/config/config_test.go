@@ -479,3 +479,241 @@ contracts:
 		t.Errorf("events count = %d, want 3", len(cfg.Contracts[0].Events))
 	}
 }
+
+// --- View Config Tests ---
+
+func TestLoad_ViewConfig(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://starknet-mainnet.example.com
+database:
+  backend: memory
+contracts:
+  - name: PriceOracle
+    address: "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
+    events:
+      - name: PriceUpdated
+        table:
+          type: log
+    views:
+      - function: get_price
+        calldata: ["0x4554480000000000000000000000000000000000000000000000000000000000"]
+        interval: 30s
+        table:
+          type: unique
+          unique_key: _view_key
+      - function: total_supply
+        interval: 5m
+        table:
+          type: log
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Contracts[0].Views) != 2 {
+		t.Fatalf("views count = %d, want 2", len(cfg.Contracts[0].Views))
+	}
+	v := cfg.Contracts[0].Views[0]
+	if v.Function != "get_price" {
+		t.Errorf("views[0].function = %q, want get_price", v.Function)
+	}
+	if v.Interval != "30s" {
+		t.Errorf("views[0].interval = %q, want 30s", v.Interval)
+	}
+	if len(v.Calldata) != 1 {
+		t.Errorf("views[0].calldata count = %d, want 1", len(v.Calldata))
+	}
+	if v.Table.Type != "unique" {
+		t.Errorf("views[0].table.type = %q, want unique", v.Table.Type)
+	}
+	if v.Table.UniqueKey != "_view_key" {
+		t.Errorf("views[0].table.unique_key = %q, want _view_key", v.Table.UniqueKey)
+	}
+
+	v2 := cfg.Contracts[0].Views[1]
+	if v2.Function != "total_supply" {
+		t.Errorf("views[1].function = %q, want total_supply", v2.Function)
+	}
+	if v2.Table.Type != "log" {
+		t.Errorf("views[1].table.type = %q, want log", v2.Table.Type)
+	}
+}
+
+func TestValidate_ViewMissingFunction(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - interval: 30s
+        table:
+          type: log
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for view missing function")
+	}
+}
+
+func TestValidate_ViewMissingInterval(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - function: get_price
+        table:
+          type: log
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for view missing interval")
+	}
+}
+
+func TestValidate_ViewInvalidInterval(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - function: get_price
+        interval: not-a-duration
+        table:
+          type: log
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid interval")
+	}
+}
+
+func TestValidate_ViewIntervalTooShort(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - function: get_price
+        interval: 500ms
+        table:
+          type: log
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for interval < 1s")
+	}
+}
+
+func TestValidate_ViewAggregationNotAllowed(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - function: get_price
+        interval: 30s
+        table:
+          type: aggregation
+          aggregate:
+            - column: total
+              operation: sum
+              field: value
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for aggregation table type in view")
+	}
+}
+
+func TestValidate_ViewBadCalldata(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - function: get_price
+        calldata: ["not-hex"]
+        interval: 30s
+        table:
+          type: log
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for bad calldata hex")
+	}
+}
+
+func TestValidate_ViewUniqueRequiresKey(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://example.com
+database:
+  backend: memory
+contracts:
+  - name: C
+    address: "0xabc"
+    events:
+      - name: E
+        table:
+          type: log
+    views:
+      - function: get_price
+        interval: 30s
+        table:
+          type: unique
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for unique view missing unique_key")
+	}
+}

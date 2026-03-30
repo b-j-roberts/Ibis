@@ -283,6 +283,59 @@ func TestProviderGetEventsContextCancelled(t *testing.T) {
 	}
 }
 
+func TestProviderCall(t *testing.T) {
+	server := mockRPCServer(t, map[string]func(json.RawMessage) (interface{}, error){
+		"starknet_call": func(params json.RawMessage) (interface{}, error) {
+			// Return two felt values (simulating a u256 return: low=1000, high=0).
+			return []string{"0x3e8", "0x0"}, nil
+		},
+	})
+	defer server.Close()
+
+	p, err := New(context.Background(), server.URL, nil)
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	contractAddr := newTestFelt(0xABC)
+	selector := newTestFelt(0x123)
+	calldata := []*felt.Felt{newTestFelt(0x456)}
+
+	result, err := p.Call(context.Background(), contractAddr, selector, calldata, rpc.BlockID{Tag: rpc.BlockTagLatest})
+	if err != nil {
+		t.Fatalf("Call() error: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("Call() returned %d felts, want 2", len(result))
+	}
+	if result[0].String() != newTestFelt(0x3e8).String() {
+		t.Errorf("result[0] = %s, want 0x3e8", result[0].String())
+	}
+}
+
+func TestProviderCallWithNilCalldata(t *testing.T) {
+	server := mockRPCServer(t, map[string]func(json.RawMessage) (interface{}, error){
+		"starknet_call": func(params json.RawMessage) (interface{}, error) {
+			return []string{"0x42"}, nil
+		},
+	})
+	defer server.Close()
+
+	p, err := New(context.Background(), server.URL, nil)
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	result, err := p.Call(context.Background(), newTestFelt(0xABC), newTestFelt(0x123), nil, rpc.BlockID{Tag: rpc.BlockTagLatest})
+	if err != nil {
+		t.Fatalf("Call() error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("Call() returned %d felts, want 1", len(result))
+	}
+}
+
 // --- Mock WSS Session Helpers ---
 
 // mockWSSDialerFunc returns a wssDialer that delivers the given events then errors.

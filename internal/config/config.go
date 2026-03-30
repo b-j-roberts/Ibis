@@ -57,6 +57,7 @@ type ContractConfig struct {
 	Address    string        `yaml:"address" json:"address"`
 	ABI        string        `yaml:"abi" json:"abi"`
 	Events     []EventConfig `yaml:"events" json:"events"`
+	Views      []ViewConfig  `yaml:"views,omitempty" json:"views,omitempty"`
 	StartBlock *uint64       `yaml:"start_block,omitempty" json:"start_block,omitempty"`
 	Dynamic    bool          `yaml:"-" json:"dynamic,omitempty"`
 
@@ -136,6 +137,15 @@ type AggregateConfig struct {
 	Column    string `yaml:"column" json:"column"`
 	Operation string `yaml:"operation" json:"operation"`
 	Field     string `yaml:"field" json:"field"`
+}
+
+// ViewConfig defines a view function to poll at a configurable interval.
+type ViewConfig struct {
+	Function string            `yaml:"function" json:"function"`
+	Calldata []string          `yaml:"calldata,omitempty" json:"calldata,omitempty"`
+	Interval string            `yaml:"interval" json:"interval"`
+	Table    TableConfig       `yaml:"table" json:"table"`
+	Headers  map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
 // envVarPattern matches ${VAR_NAME} for environment variable expansion.
