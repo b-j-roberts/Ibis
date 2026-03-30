@@ -735,6 +735,469 @@ func TestDiscoveredContractConfig_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// --- UDC Event Format Detection Tests ---
+
+// makeUDCEventV0 creates a Cairo 0 ContractDeployed event from the UDC.
+// v0 layout: keys[0]=selector, data[0]=address, data[1]=deployer, data[2]=unique, data[3]=classHash, data[4]=calldata_len, data[5]=salt
+func makeUDCEventV0(deployedAddr, classHash *felt.Felt, blockNumber uint64) provider.RawEvent {
+	selector := abi.ComputeSelector("ContractDeployed")
+	deployer := new(felt.Felt).SetUint64(0xDE910E8)
+	unique := new(felt.Felt).SetUint64(1)
+	calldataLen := new(felt.Felt).SetUint64(0)
+	salt := new(felt.Felt).SetUint64(0x5A17)
+
+	udcAddr, _ := new(felt.Felt).SetString(UDCAddress)
+	txHash := new(felt.Felt).SetUint64(blockNumber*1000 + 1)
+	blockHash := new(felt.Felt).SetUint64(blockNumber * 100)
+
+	return provider.RawEvent{
+		BlockNumber:     blockNumber,
+		BlockHash:       blockHash,
+		TransactionHash: txHash,
+		ContractAddress: udcAddr,
+		Keys:            []*felt.Felt{selector},
+		Data:            []*felt.Felt{deployedAddr, deployer, unique, classHash, calldataLen, salt},
+		FinalityStatus:  "ACCEPTED_ON_L2",
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestAutoDetectUDCLayout_V1(t *testing.T) {
+	selector := abi.ComputeSelector("ContractDeployed")
+	addr := new(felt.Felt).SetUint64(0x123)
+	deployer := new(felt.Felt).SetUint64(0x456)
+	unique := new(felt.Felt).SetUint64(1)
+	classHash := new(felt.Felt).SetUint64(0xABC)
+
+	keys := []*felt.Felt{selector, addr, deployer, unique}
+	data := []*felt.Felt{classHash}
+
+	layout, err := autoDetectUDCLayout(keys, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.version != udcVersionV1 {
+		t.Fatal("expected v1 layout")
+	}
+	if !layout.addressInKeys || layout.addressIndex != 1 {
+		t.Fatal("expected address in keys[1]")
+	}
+	if layout.hashInKeys || layout.hashIndex != 0 {
+		t.Fatal("expected class hash in data[0]")
+	}
+}
+
+func TestAutoDetectUDCLayout_V0(t *testing.T) {
+	selector := abi.ComputeSelector("ContractDeployed")
+	addr := new(felt.Felt).SetUint64(0x123)
+	deployer := new(felt.Felt).SetUint64(0x456)
+	unique := new(felt.Felt).SetUint64(1)
+	classHash := new(felt.Felt).SetUint64(0xABC)
+
+	keys := []*felt.Felt{selector}
+	data := []*felt.Felt{addr, deployer, unique, classHash}
+
+	layout, err := autoDetectUDCLayout(keys, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.version != udcVersionV0 {
+		t.Fatal("expected v0 layout")
+	}
+	if layout.addressInKeys || layout.addressIndex != 0 {
+		t.Fatal("expected address in data[0]")
+	}
+	if layout.hashInKeys || layout.hashIndex != 3 {
+		t.Fatal("expected class hash in data[3]")
+	}
+}
+
+func TestAutoDetectUDCLayout_Unrecognized(t *testing.T) {
+	// 2 keys, 2 data — matches neither pattern.
+	keys := []*felt.Felt{new(felt.Felt).SetUint64(1), new(felt.Felt).SetUint64(2)}
+	data := []*felt.Felt{new(felt.Felt).SetUint64(3), new(felt.Felt).SetUint64(4)}
+
+	_, err := autoDetectUDCLayout(keys, data)
+	if err == nil {
+		t.Fatal("expected error for unrecognized layout")
+	}
+	if !strings.Contains(err.Error(), "unrecognized") {
+		t.Fatalf("expected 'unrecognized' in error, got: %v", err)
+	}
+}
+
+func TestResolveUDCLayout_ExplicitV0(t *testing.T) {
+	ds := &discoveryState{
+		udcFormat: &config.UDCEventFormat{Version: "v0"},
+	}
+	// Even with v1-shaped keys, explicit v0 should win.
+	keys := []*felt.Felt{new(felt.Felt), new(felt.Felt), new(felt.Felt), new(felt.Felt)}
+	data := []*felt.Felt{new(felt.Felt)}
+
+	layout, err := ds.resolveUDCLayout(keys, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.version != udcVersionV0 {
+		t.Fatal("expected v0 layout when explicitly configured")
+	}
+}
+
+func TestResolveUDCLayout_ExplicitV1(t *testing.T) {
+	ds := &discoveryState{
+		udcFormat: &config.UDCEventFormat{Version: "v1"},
+	}
+	// Even with v0-shaped keys, explicit v1 should win.
+	keys := []*felt.Felt{new(felt.Felt)}
+	data := []*felt.Felt{new(felt.Felt), new(felt.Felt), new(felt.Felt), new(felt.Felt)}
+
+	layout, err := ds.resolveUDCLayout(keys, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.version != udcVersionV1 {
+		t.Fatal("expected v1 layout when explicitly configured")
+	}
+}
+
+func TestResolveUDCLayout_FineGrainedOverrides(t *testing.T) {
+	ds := &discoveryState{
+		udcFormat: &config.UDCEventFormat{
+			AddressKey:    intPtr(2),
+			ClassHashData: intPtr(1),
+		},
+	}
+	// v1-shaped event.
+	keys := []*felt.Felt{new(felt.Felt), new(felt.Felt), new(felt.Felt), new(felt.Felt)}
+	data := []*felt.Felt{new(felt.Felt), new(felt.Felt)}
+
+	layout, err := ds.resolveUDCLayout(keys, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !layout.addressInKeys || layout.addressIndex != 2 {
+		t.Fatalf("expected address in keys[2], got inKeys=%v index=%d", layout.addressInKeys, layout.addressIndex)
+	}
+	if layout.hashInKeys || layout.hashIndex != 1 {
+		t.Fatalf("expected class hash in data[1], got inKeys=%v index=%d", layout.hashInKeys, layout.hashIndex)
+	}
+}
+
+func TestExtractDeployedAddress_BoundsCheck(t *testing.T) {
+	layout := &udcLayout{addressInKeys: true, addressIndex: 5}
+	keys := []*felt.Felt{new(felt.Felt), new(felt.Felt)}
+	data := []*felt.Felt{}
+
+	_, err := extractDeployedAddress(layout, keys, data)
+	if err == nil {
+		t.Fatal("expected bounds error")
+	}
+	if !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected 'out of range' in error, got: %v", err)
+	}
+}
+
+func TestExtractClassHash_BoundsCheck(t *testing.T) {
+	layout := &udcLayout{hashInKeys: false, hashIndex: 10}
+	keys := []*felt.Felt{}
+	data := []*felt.Felt{new(felt.Felt)}
+
+	_, err := extractClassHash(layout, keys, data)
+	if err == nil {
+		t.Fatal("expected bounds error")
+	}
+	if !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected 'out of range' in error, got: %v", err)
+	}
+}
+
+func TestHandleDiscoveryEvent_V0EventAutoDetected(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	classHash := "0xABCDEF"
+	e := newDiscoveryTestEngine(st, classHash)
+
+	deployedAddr := new(felt.Felt).SetUint64(0x12345)
+	classHashFelt, _ := new(felt.Felt).SetString(classHash)
+
+	// Send a v0-shaped event.
+	raw := makeUDCEventV0(deployedAddr, classHashFelt, 100)
+	e.handleDiscoveryEvent(ctx, &raw)
+
+	e.mu.RLock()
+	count := len(e.contracts)
+	e.mu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 registered contract from v0 event, got %d", count)
+	}
+
+	// Verify address is correct (from data[0], not keys[1]).
+	e.mu.RLock()
+	cs := e.contracts[0]
+	e.mu.RUnlock()
+
+	if cs.config.Address != deployedAddr.String() {
+		t.Fatalf("expected address %s, got %s", deployedAddr.String(), cs.config.Address)
+	}
+}
+
+func TestHandleDiscoveryEvent_ExplicitV1Override(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	classHash := "0xABCDEF"
+	e := newDiscoveryTestEngine(st, classHash)
+	e.discovery.udcFormat = &config.UDCEventFormat{Version: "v1"}
+
+	deployedAddr := new(felt.Felt).SetUint64(0x12345)
+	classHashFelt, _ := new(felt.Felt).SetString(classHash)
+
+	// Send a v1-shaped event with explicit v1 config.
+	raw := makeUDCEvent(deployedAddr, classHashFelt, 100)
+	e.handleDiscoveryEvent(ctx, &raw)
+
+	e.mu.RLock()
+	count := len(e.contracts)
+	e.mu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 registered contract with explicit v1, got %d", count)
+	}
+}
+
+func TestHandleDiscoveryEvent_ExplicitV0Override(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	classHash := "0xABCDEF"
+	e := newDiscoveryTestEngine(st, classHash)
+	e.discovery.udcFormat = &config.UDCEventFormat{Version: "v0"}
+
+	deployedAddr := new(felt.Felt).SetUint64(0x12345)
+	classHashFelt, _ := new(felt.Felt).SetString(classHash)
+
+	// Send a v0-shaped event with explicit v0 config.
+	raw := makeUDCEventV0(deployedAddr, classHashFelt, 100)
+	e.handleDiscoveryEvent(ctx, &raw)
+
+	e.mu.RLock()
+	count := len(e.contracts)
+	e.mu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 registered contract with explicit v0, got %d", count)
+	}
+}
+
+func TestHandleDiscoveryEvent_MalformedEvent_NeitherPattern(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	classHash := "0xABCDEF"
+	e := newDiscoveryTestEngine(st, classHash)
+
+	// 2 keys, 2 data — matches neither v0 nor v1.
+	udcAddr, _ := new(felt.Felt).SetString(UDCAddress)
+	selector := abi.ComputeSelector("ContractDeployed")
+	raw := provider.RawEvent{
+		BlockNumber:     100,
+		ContractAddress: udcAddr,
+		Keys:            []*felt.Felt{selector, new(felt.Felt).SetUint64(1)},
+		Data:            []*felt.Felt{new(felt.Felt).SetUint64(2), new(felt.Felt).SetUint64(3)},
+	}
+
+	e.handleDiscoveryEvent(ctx, &raw)
+
+	e.mu.RLock()
+	count := len(e.contracts)
+	e.mu.RUnlock()
+
+	if count != 0 {
+		t.Fatalf("expected 0 contracts for unrecognized event shape, got %d", count)
+	}
+}
+
+func TestHandleDiscoveryEvent_FineGrainedIndexOverride(t *testing.T) {
+	st := memory.New()
+	ctx := context.Background()
+
+	classHash := "0xABCDEF"
+	e := newDiscoveryTestEngine(st, classHash)
+
+	// Custom layout: address in keys[2], class hash in data[1].
+	e.discovery.udcFormat = &config.UDCEventFormat{
+		AddressKey:    intPtr(2),
+		ClassHashData: intPtr(1),
+	}
+
+	classHashFelt, _ := new(felt.Felt).SetString(classHash)
+	deployedAddr := new(felt.Felt).SetUint64(0xBEEF)
+
+	// Build a v1-shaped event but put the address at keys[2] and classHash at data[1].
+	selector := abi.ComputeSelector("ContractDeployed")
+	udcAddr, _ := new(felt.Felt).SetString(UDCAddress)
+	raw := provider.RawEvent{
+		BlockNumber:     200,
+		ContractAddress: udcAddr,
+		Keys:            []*felt.Felt{selector, new(felt.Felt).SetUint64(0), deployedAddr, new(felt.Felt).SetUint64(1)},
+		Data:            []*felt.Felt{new(felt.Felt).SetUint64(0), classHashFelt},
+	}
+
+	e.handleDiscoveryEvent(ctx, &raw)
+
+	e.mu.RLock()
+	count := len(e.contracts)
+	e.mu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 contract with fine-grained overrides, got %d", count)
+	}
+
+	e.mu.RLock()
+	cs := e.contracts[0]
+	e.mu.RUnlock()
+
+	if cs.config.Address != deployedAddr.String() {
+		t.Fatalf("expected address from keys[2], got %s", cs.config.Address)
+	}
+}
+
+func TestSetupDiscovery_LogsUDCFormat(t *testing.T) {
+	// Ensure setupDiscovery does not fail when UDCEvent is configured.
+	classHash := "0x01234567890abcdef01234567890abcdef01234567890abcdef0123456789ab"
+	e := &Engine{
+		cfg: &config.Config{
+			Indexer: config.IndexerConfig{
+				UDCAddress: UDCAddress,
+				UDCEvent:   &config.UDCEventFormat{Version: "v0"},
+			},
+			Discover: []config.DiscoverConfig{
+				testDiscoverConfig(classHash),
+			},
+		},
+		logger: noopLogger(),
+	}
+
+	if err := e.setupDiscovery(); err != nil {
+		t.Fatal(err)
+	}
+	if e.discovery.udcFormat == nil {
+		t.Fatal("expected udcFormat to be stored in discovery state")
+	}
+	if e.discovery.udcFormat.Version != "v0" {
+		t.Fatalf("expected version v0, got %s", e.discovery.udcFormat.Version)
+	}
+}
+
+// --- UDC Event Config Validation Tests ---
+
+func TestValidate_UDCEventFormat(t *testing.T) {
+	baseCfg := config.Config{
+		Network:  "mainnet",
+		RPC:      "wss://example.com",
+		Database: config.DatabaseConfig{Backend: "memory"},
+		Contracts: []config.ContractConfig{
+			{Name: "test", Address: "0xabc", ABI: "fetch",
+				Events: []config.EventConfig{{Name: "*", Table: config.TableConfig{Type: "log"}}}},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		udc     *config.UDCEventFormat
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid auto version",
+			udc:  &config.UDCEventFormat{Version: "auto"},
+		},
+		{
+			name: "valid v0",
+			udc:  &config.UDCEventFormat{Version: "v0"},
+		},
+		{
+			name: "valid v1",
+			udc:  &config.UDCEventFormat{Version: "v1"},
+		},
+		{
+			name: "valid empty version (defaults to auto)",
+			udc:  &config.UDCEventFormat{},
+		},
+		{
+			name:    "invalid version",
+			udc:     &config.UDCEventFormat{Version: "v2"},
+			wantErr: true,
+			errMsg:  "version",
+		},
+		{
+			name:    "mutual exclusivity: address_key and address_data",
+			udc:     &config.UDCEventFormat{AddressKey: intPtr(1), AddressData: intPtr(0)},
+			wantErr: true,
+			errMsg:  "mutually exclusive",
+		},
+		{
+			name:    "mutual exclusivity: class_hash_key and class_hash_data",
+			udc:     &config.UDCEventFormat{ClassHashKey: intPtr(1), ClassHashData: intPtr(0)},
+			wantErr: true,
+			errMsg:  "mutually exclusive",
+		},
+		{
+			name:    "negative index: address_key",
+			udc:     &config.UDCEventFormat{AddressKey: intPtr(-1)},
+			wantErr: true,
+			errMsg:  "non-negative",
+		},
+		{
+			name:    "negative index: class_hash_data",
+			udc:     &config.UDCEventFormat{ClassHashData: intPtr(-2)},
+			wantErr: true,
+			errMsg:  "non-negative",
+		},
+		{
+			name:    "overrides with explicit v0",
+			udc:     &config.UDCEventFormat{Version: "v0", AddressKey: intPtr(2)},
+			wantErr: true,
+			errMsg:  "not allowed",
+		},
+		{
+			name:    "overrides with explicit v1",
+			udc:     &config.UDCEventFormat{Version: "v1", ClassHashData: intPtr(1)},
+			wantErr: true,
+			errMsg:  "not allowed",
+		},
+		{
+			name: "overrides with auto version is valid",
+			udc:  &config.UDCEventFormat{Version: "auto", AddressKey: intPtr(2), ClassHashData: intPtr(1)},
+		},
+		{
+			name: "overrides with empty version is valid",
+			udc:  &config.UDCEventFormat{AddressKey: intPtr(2)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := baseCfg
+			c.Indexer.UDCEvent = tt.udc
+			err := config.Validate(&c)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				if tt.errMsg != "" && !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.errMsg)) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errMsg, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
 // --- Config Validation Tests ---
 
 func TestValidate_DiscoverConfig(t *testing.T) {

@@ -46,10 +46,28 @@ type APIConfig struct {
 }
 
 type IndexerConfig struct {
-	StartBlock    *uint64 `yaml:"start_block"`
-	PendingBlocks bool    `yaml:"pending_blocks"`
-	BatchSize     int     `yaml:"batch_size"`
-	UDCAddress    string  `yaml:"udc_address,omitempty"`
+	StartBlock    *uint64         `yaml:"start_block"`
+	PendingBlocks bool            `yaml:"pending_blocks"`
+	BatchSize     int             `yaml:"batch_size"`
+	UDCAddress    string          `yaml:"udc_address,omitempty"`
+	UDCEvent      *UDCEventFormat `yaml:"udc_event,omitempty"`
+}
+
+// UDCEventFormat configures how ibis parses UDC ContractDeployed events.
+// The two known layouts differ by Cairo version:
+//   - v1 (modern Cairo): keys[1]=address, data[0]=classHash
+//   - v0 (Cairo 0): data[0]=address, data[3]=classHash
+//
+// When Version is "auto" (default), ibis auto-detects based on key count.
+type UDCEventFormat struct {
+	// Version selects the UDC event layout: "auto", "v0", or "v1". Default: "auto".
+	Version string `yaml:"version,omitempty"`
+
+	// Fine-grained overrides (only valid when version is "auto" or omitted):
+	AddressKey    *int `yaml:"address_key,omitempty"`     // index in keys[] for deployed address
+	AddressData   *int `yaml:"address_data,omitempty"`    // index in data[] for deployed address
+	ClassHashKey  *int `yaml:"class_hash_key,omitempty"`  // index in keys[] for class hash
+	ClassHashData *int `yaml:"class_hash_data,omitempty"` // index in data[] for class hash
 }
 
 type ContractConfig struct {

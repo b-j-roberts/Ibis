@@ -75,6 +75,12 @@ func Validate(cfg *Config) error {
 		}
 	}
 
+	if cfg.Indexer.UDCEvent != nil {
+		if err := validateUDCEvent(cfg.Indexer.UDCEvent); err != nil {
+			return err
+		}
+	}
+
 	if len(cfg.Contracts) == 0 && len(cfg.Discover) == 0 {
 		return fieldError("contracts", "at least one contract or discover entry is required")
 	}
@@ -294,6 +300,52 @@ func validateHexHash(hash string) error {
 			return fmt.Errorf("invalid hex character: %c", c)
 		}
 	}
+	return nil
+}
+
+// validateUDCEvent validates the UDCEventFormat configuration.
+func validateUDCEvent(u *UDCEventFormat) error {
+	prefix := "indexer.udc_event"
+
+	// Validate version.
+	validVersions := map[string]bool{"": true, "auto": true, "v0": true, "v1": true}
+	if !validVersions[u.Version] {
+		return fieldError(prefix+".version", "must be one of: auto, v0, v1")
+	}
+
+	// Mutual exclusivity: address_key and address_data cannot both be set.
+	if u.AddressKey != nil && u.AddressData != nil {
+		return fieldError(prefix, "address_key and address_data are mutually exclusive")
+	}
+	// Mutual exclusivity: class_hash_key and class_hash_data cannot both be set.
+	if u.ClassHashKey != nil && u.ClassHashData != nil {
+		return fieldError(prefix, "class_hash_key and class_hash_data are mutually exclusive")
+	}
+
+	// Non-negative index values.
+	for _, pair := range []struct {
+		name string
+		val  *int
+	}{
+		{"address_key", u.AddressKey},
+		{"address_data", u.AddressData},
+		{"class_hash_key", u.ClassHashKey},
+		{"class_hash_data", u.ClassHashData},
+	} {
+		if pair.val != nil && *pair.val < 0 {
+			return fieldError(prefix+"."+pair.name, "must be non-negative")
+		}
+	}
+
+	// Reject fine-grained overrides when version is explicitly v0 or v1.
+	if u.Version == "v0" || u.Version == "v1" {
+		hasOverrides := u.AddressKey != nil || u.AddressData != nil ||
+			u.ClassHashKey != nil || u.ClassHashData != nil
+		if hasOverrides {
+			return fieldError(prefix, "fine-grained overrides are not allowed when version is explicitly v0 or v1")
+		}
+	}
+
 	return nil
 }
 

@@ -9,8 +9,8 @@ import (
 
 // ABI represents a parsed Cairo contract ABI with resolved types and events.
 type ABI struct {
-	Types     map[string]*TypeDef    // Full name -> resolved type definition
-	Events    []*EventDef            // All emittable events (struct-kind events)
+	Types     map[string]*TypeDef     // Full name -> resolved type definition
+	Events    []*EventDef             // All emittable events (struct-kind events)
 	Functions map[string]*FunctionDef // Short name -> view function definitions
 }
 

@@ -18,12 +18,36 @@ const UDCAddress = "0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b
 // discoveryCursorName is the cursor key used to persist UDC scan progress.
 const discoveryCursorName = "_ibis_discover"
 
+// udcVersion represents a resolved UDC event format.
+type udcVersion int
+
+const (
+	udcVersionV1 udcVersion = iota // modern Cairo: keys[1]=address, data[0]=classHash
+	udcVersionV0                   // Cairo 0: data[0]=address, data[3]=classHash
+)
+
+// udcLayout describes where to find the deployed address and class hash in a UDC event.
+type udcLayout struct {
+	version       udcVersion
+	addressInKeys bool // true = address is in keys, false = in data
+	addressIndex  int
+	hashInKeys    bool // true = class hash is in keys, false = in data
+	hashIndex     int
+}
+
+// v1 and v0 default layouts.
+var (
+	udcLayoutV1 = udcLayout{version: udcVersionV1, addressInKeys: true, addressIndex: 1, hashInKeys: false, hashIndex: 0}
+	udcLayoutV0 = udcLayout{version: udcVersionV0, addressInKeys: false, addressIndex: 0, hashInKeys: false, hashIndex: 3}
+)
+
 // discoveryState holds pre-computed values for class-hash-based contract discovery.
 type discoveryState struct {
 	udcAddress  *felt.Felt
 	udcSelector *felt.Felt                           // sn_keccak("ContractDeployed")
 	classHashes map[felt.Felt]*config.DiscoverConfig // class hash felt -> discover config
 	cachedABI   map[string]*abi.ABI                  // class hash hex string -> resolved ABI
+	udcFormat   *config.UDCEventFormat               // configured format (may be nil for auto)
 }
 
 // setupDiscovery initializes discovery state from config. Called during engine setup.
@@ -54,10 +78,28 @@ func (e *Engine) setupDiscovery() error {
 		udcSelector: selector,
 		classHashes: classHashes,
 		cachedABI:   make(map[string]*abi.ABI),
+		udcFormat:   e.cfg.Indexer.UDCEvent,
+	}
+
+	// Log the configured UDC event format.
+	formatDesc := "auto-detect"
+	if e.cfg.Indexer.UDCEvent != nil {
+		switch e.cfg.Indexer.UDCEvent.Version {
+		case "v0":
+			formatDesc = "v0 (Cairo 0)"
+		case "v1":
+			formatDesc = "v1 (modern Cairo)"
+		default:
+			if e.cfg.Indexer.UDCEvent.AddressKey != nil || e.cfg.Indexer.UDCEvent.AddressData != nil ||
+				e.cfg.Indexer.UDCEvent.ClassHashKey != nil || e.cfg.Indexer.UDCEvent.ClassHashData != nil {
+				formatDesc = "auto-detect with overrides"
+			}
+		}
 	}
 
 	e.logger.Info("contract discovery enabled",
 		"class_hashes", len(e.cfg.Discover),
+		"udc_event_format", formatDesc,
 	)
 
 	return nil
@@ -71,34 +113,137 @@ func (e *Engine) isDiscoveryEvent(raw *provider.RawEvent) bool {
 	return raw.ContractAddress.Equal(e.discovery.udcAddress)
 }
 
+// resolveUDCLayout determines the UDC event layout for a given event.
+// It uses explicit config when set, otherwise auto-detects from key/data counts.
+func (ds *discoveryState) resolveUDCLayout(keys, data []*felt.Felt) (*udcLayout, error) {
+	// Explicit version set in config.
+	if ds.udcFormat != nil {
+		switch ds.udcFormat.Version {
+		case "v0":
+			return &udcLayoutV0, nil
+		case "v1":
+			return &udcLayoutV1, nil
+		}
+	}
+
+	// Auto-detect based on key count.
+	layout, err := autoDetectUDCLayout(keys, data)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply fine-grained overrides if configured.
+	if ds.udcFormat != nil {
+		if ds.udcFormat.AddressKey != nil {
+			layout.addressInKeys = true
+			layout.addressIndex = *ds.udcFormat.AddressKey
+		}
+		if ds.udcFormat.AddressData != nil {
+			layout.addressInKeys = false
+			layout.addressIndex = *ds.udcFormat.AddressData
+		}
+		if ds.udcFormat.ClassHashKey != nil {
+			layout.hashInKeys = true
+			layout.hashIndex = *ds.udcFormat.ClassHashKey
+		}
+		if ds.udcFormat.ClassHashData != nil {
+			layout.hashInKeys = false
+			layout.hashIndex = *ds.udcFormat.ClassHashData
+		}
+	}
+
+	return layout, nil
+}
+
+// autoDetectUDCLayout auto-detects UDC layout based on key/data counts.
+//   - len(keys) >= 4 → v1 (modern Cairo)
+//   - len(keys) == 1 && len(data) >= 4 → v0 (Cairo 0)
+func autoDetectUDCLayout(keys, data []*felt.Felt) (*udcLayout, error) {
+	if len(keys) >= 4 {
+		l := udcLayoutV1
+		return &l, nil
+	}
+	if len(keys) == 1 && len(data) >= 4 {
+		l := udcLayoutV0
+		return &l, nil
+	}
+	return nil, fmt.Errorf("unrecognized UDC event layout: keys=%d, data=%d", len(keys), len(data))
+}
+
+// extractDeployedAddress extracts the deployed contract address from a UDC event.
+func extractDeployedAddress(layout *udcLayout, keys, data []*felt.Felt) (*felt.Felt, error) {
+	if layout.addressInKeys {
+		if layout.addressIndex >= len(keys) {
+			return nil, fmt.Errorf("address_key index %d out of range (keys length %d)", layout.addressIndex, len(keys))
+		}
+		return keys[layout.addressIndex], nil
+	}
+	if layout.addressIndex >= len(data) {
+		return nil, fmt.Errorf("address_data index %d out of range (data length %d)", layout.addressIndex, len(data))
+	}
+	return data[layout.addressIndex], nil
+}
+
+// extractClassHash extracts the class hash from a UDC event.
+func extractClassHash(layout *udcLayout, keys, data []*felt.Felt) (*felt.Felt, error) {
+	if layout.hashInKeys {
+		if layout.hashIndex >= len(keys) {
+			return nil, fmt.Errorf("class_hash_key index %d out of range (keys length %d)", layout.hashIndex, len(keys))
+		}
+		return keys[layout.hashIndex], nil
+	}
+	if layout.hashIndex >= len(data) {
+		return nil, fmt.Errorf("class_hash_data index %d out of range (data length %d)", layout.hashIndex, len(data))
+	}
+	return data[layout.hashIndex], nil
+}
+
 // handleDiscoveryEvent processes a UDC ContractDeployed event. If the deployed
 // contract's class hash matches a discover config, the contract is auto-registered.
 //
-// UDC event layout:
+// Two known UDC event layouts:
 //
-//	keys[0] = sn_keccak("ContractDeployed")
-//	keys[1] = deployed contract address
-//	keys[2] = deployer address
-//	keys[3] = unique (0 or 1)
-//	data[0] = classHash
-//	data[1..n] = calldata (length-prefixed span)
-//	data[n+1] = salt
+// v1 (modern Cairo):
+//
+//	keys[0]=selector, keys[1]=address, keys[2]=deployer, keys[3]=unique
+//	data[0]=classHash, data[1..n]=calldata, data[n+1]=salt
+//
+// v0 (Cairo 0):
+//
+//	keys[0]=selector
+//	data[0]=address, data[1]=deployer, data[2]=unique, data[3]=classHash, data[4..]=calldata, data[last]=salt
 func (e *Engine) handleDiscoveryEvent(ctx context.Context, raw *provider.RawEvent) {
-	// Verify this is a ContractDeployed event.
-	if len(raw.Keys) < 2 || !raw.Keys[0].Equal(e.discovery.udcSelector) {
+	// Verify this is a ContractDeployed event (need at least the selector key).
+	if len(raw.Keys) < 1 || !raw.Keys[0].Equal(e.discovery.udcSelector) {
 		return
 	}
 
-	// Need at least keys[1] (address) and data[0] (classHash).
-	if len(raw.Data) < 1 {
-		e.logger.Warn("malformed ContractDeployed event: missing data fields",
+	// Resolve the layout for this event.
+	layout, err := e.discovery.resolveUDCLayout(raw.Keys, raw.Data)
+	if err != nil {
+		e.logger.Warn("skipping UDC event: "+err.Error(),
+			"block", raw.BlockNumber,
+			"keys", len(raw.Keys),
+			"data", len(raw.Data),
+		)
+		return
+	}
+
+	deployedAddress, err := extractDeployedAddress(layout, raw.Keys, raw.Data)
+	if err != nil {
+		e.logger.Warn("malformed ContractDeployed event: "+err.Error(),
 			"block", raw.BlockNumber,
 		)
 		return
 	}
 
-	deployedAddress := raw.Keys[1]
-	classHash := raw.Data[0]
+	classHash, err := extractClassHash(layout, raw.Keys, raw.Data)
+	if err != nil {
+		e.logger.Warn("malformed ContractDeployed event: "+err.Error(),
+			"block", raw.BlockNumber,
+		)
+		return
+	}
 
 	// Match class hash against discover configs.
 	dc, ok := e.discovery.classHashes[*classHash]
