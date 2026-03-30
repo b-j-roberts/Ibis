@@ -60,7 +60,7 @@ func makeUDCEvent(deployedAddr, classHash *felt.Felt, blockNumber uint64) provid
 func newDiscoveryTestEngine(st store.Store, classHash string) *Engine {
 	discoverCfg := testDiscoverConfig(classHash)
 	cfg := &config.Config{
-		Indexer:  config.IndexerConfig{StartBlock: config.Uint64Ptr(0)},
+		Indexer:  config.IndexerConfig{StartBlock: config.Uint64Ptr(0), UDCAddress: UDCAddress},
 		Discover: []config.DiscoverConfig{discoverCfg},
 	}
 
@@ -158,6 +158,7 @@ func TestSetupDiscovery_WithConfig(t *testing.T) {
 	classHash := "0x01234567890abcdef01234567890abcdef01234567890abcdef0123456789ab"
 	e := &Engine{
 		cfg: &config.Config{
+			Indexer: config.IndexerConfig{UDCAddress: UDCAddress},
 			Discover: []config.DiscoverConfig{
 				testDiscoverConfig(classHash),
 			},
@@ -195,6 +196,55 @@ func TestSetupDiscovery_InvalidClassHash(t *testing.T) {
 
 	if err := e.setupDiscovery(); err == nil {
 		t.Fatal("expected error for invalid class hash")
+	}
+}
+
+func TestSetupDiscovery_CustomUDCAddress(t *testing.T) {
+	classHash := "0x01234567890abcdef01234567890abcdef01234567890abcdef0123456789ab"
+	customUDC := "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf"
+	e := &Engine{
+		cfg: &config.Config{
+			Indexer: config.IndexerConfig{UDCAddress: customUDC},
+			Discover: []config.DiscoverConfig{
+				testDiscoverConfig(classHash),
+			},
+		},
+		logger: noopLogger(),
+	}
+
+	if err := e.setupDiscovery(); err != nil {
+		t.Fatal(err)
+	}
+	if e.discovery == nil {
+		t.Fatal("expected non-nil discovery")
+	}
+
+	// Verify the custom UDC address was used.
+	expectedUDC, _ := new(felt.Felt).SetString(customUDC)
+	if !e.discovery.udcAddress.Equal(expectedUDC) {
+		t.Fatalf("expected custom UDC address %s, got %s", expectedUDC, e.discovery.udcAddress)
+	}
+}
+
+func TestSetupDiscovery_DefaultUDCAddress(t *testing.T) {
+	classHash := "0x01234567890abcdef01234567890abcdef01234567890abcdef0123456789ab"
+	e := &Engine{
+		cfg: &config.Config{
+			Indexer: config.IndexerConfig{UDCAddress: UDCAddress},
+			Discover: []config.DiscoverConfig{
+				testDiscoverConfig(classHash),
+			},
+		},
+		logger: noopLogger(),
+	}
+
+	if err := e.setupDiscovery(); err != nil {
+		t.Fatal(err)
+	}
+
+	expectedUDC, _ := new(felt.Felt).SetString(UDCAddress)
+	if !e.discovery.udcAddress.Equal(expectedUDC) {
+		t.Fatalf("expected default UDC address, got %s", e.discovery.udcAddress)
 	}
 }
 

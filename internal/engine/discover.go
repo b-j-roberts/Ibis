@@ -32,7 +32,7 @@ func (e *Engine) setupDiscovery() error {
 		return nil
 	}
 
-	udcAddr, err := new(felt.Felt).SetString(UDCAddress)
+	udcAddr, err := new(felt.Felt).SetString(e.cfg.Indexer.UDCAddress)
 	if err != nil {
 		return fmt.Errorf("parsing UDC address: %w", err)
 	}

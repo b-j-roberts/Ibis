@@ -344,6 +344,64 @@ contracts:
 	}
 }
 
+func TestLoad_UDCAddressDefault(t *testing.T) {
+	path := writeTestConfig(t, validConfig)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Indexer.UDCAddress != "0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b050221" {
+		t.Errorf("udc_address = %q, want default UDC address", cfg.Indexer.UDCAddress)
+	}
+}
+
+func TestLoad_UDCAddressCustom(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://starknet-mainnet.example.com
+database:
+  backend: memory
+indexer:
+  udc_address: "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf"
+contracts:
+  - name: TestContract
+    address: "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
+    events:
+      - name: "*"
+        table:
+          type: log
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Indexer.UDCAddress != "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf" {
+		t.Errorf("udc_address = %q, want custom devnet address", cfg.Indexer.UDCAddress)
+	}
+}
+
+func TestValidate_InvalidUDCAddress(t *testing.T) {
+	path := writeTestConfig(t, `
+network: mainnet
+rpc: wss://starknet-mainnet.example.com
+database:
+  backend: memory
+indexer:
+  udc_address: "not-a-hex-address"
+contracts:
+  - name: TestContract
+    address: "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
+    events:
+      - name: "*"
+        table:
+          type: log
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid udc_address")
+	}
+}
+
 func TestConfig_IsWSS(t *testing.T) {
 	tests := []struct {
 		rpc  string

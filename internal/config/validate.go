@@ -63,6 +63,12 @@ func Validate(cfg *Config) error {
 		}
 	}
 
+	if cfg.Indexer.UDCAddress != "" {
+		if err := validateHexHash(cfg.Indexer.UDCAddress); err != nil {
+			return fieldError("indexer.udc_address", err.Error())
+		}
+	}
+
 	if len(cfg.Contracts) == 0 && len(cfg.Discover) == 0 {
 		return fieldError("contracts", "at least one contract or discover entry is required")
 	}

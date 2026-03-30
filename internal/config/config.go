@@ -49,6 +49,7 @@ type IndexerConfig struct {
 	StartBlock    *uint64 `yaml:"start_block"`
 	PendingBlocks bool    `yaml:"pending_blocks"`
 	BatchSize     int     `yaml:"batch_size"`
+	UDCAddress    string  `yaml:"udc_address,omitempty"`
 }
 
 type ContractConfig struct {
@@ -191,6 +192,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Indexer.BatchSize == 0 {
 		cfg.Indexer.BatchSize = 10
+	}
+	if cfg.Indexer.UDCAddress == "" {
+		cfg.Indexer.UDCAddress = "0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b050221"
 	}
 
 	for i := range cfg.Contracts {

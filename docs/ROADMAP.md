@@ -225,6 +225,115 @@
 - Preset registry is a simple `map[string]PresetDefinition` in Go code — no external files or plugin system needed. Future presets (AMM, governance) can be added by extending this map.
 - Config YAML shape: `contracts: [{ name: STRK, address: "0x...", preset: erc20 }]` — that's all a user needs for a fully functional ERC20 indexer with transfer analytics.
 
+### 3.19 View Function Config, Provider & ABI Decoding
+
+**Description**: Add the foundational infrastructure for view function indexing: config parsing, validation, `starknet_call` support in the provider, and ABI-based decoding of function return values. This task builds all the pieces that the poller (3.20) consumes, without changing the indexing engine's runtime behavior. View function indexing allows users to poll contract read functions at configurable intervals and store results as regular ibis tables with auto-generated REST APIs — capturing on-chain state that is not derivable from events alone (e.g., oracle prices, total supply, governance parameters).
+
+**Requirements**:
+- [ ] Add `ViewConfig` struct to `internal/config/config.go` with fields: `Function` (string, required — the Cairo function name), `Calldata` ([]string, optional — hex felt arguments), `Interval` (string, required — Go duration like `"30s"`, `"5m"`), `Table` (TableConfig, required — reuses existing table config with `type: unique` or `type: log`)
+- [ ] Add `Views []ViewConfig` field to `ContractConfig` (`yaml:"views,omitempty" json:"views,omitempty"`)
+- [ ] Config validation in `internal/config/validate.go`: reject empty `function` names, validate `interval` parses as `time.Duration` (minimum 1s), validate `calldata` entries are valid hex felt strings, validate table type is `log` or `unique` only (aggregation not supported for views), require `unique_key` when table type is `unique`
+- [ ] Add `Call(ctx context.Context, contractAddress *felt.Felt, entryPointSelector *felt.Felt, calldata []*felt.Felt, blockID rpc.BlockID) ([]*felt.Felt, error)` method to `StarknetProvider` in `internal/provider/provider.go`, wrapping the underlying `starknet.go` `provider.Call()` RPC method
+- [ ] Add `FunctionDef` struct to `internal/abi/types.go` with fields: `Name` (string), `Selector` (*felt.Felt — computed via `sn_keccak`), `Inputs` ([]Member), `Outputs` ([]Member), `StateMutability` (string — must be `"view"`)
+- [ ] Extend ABI parser (`internal/abi/parser.go`) to extract `FunctionDef` entries from ABI JSON for functions with `state_mutability: "view"`. Store in a `Functions` map on the `ABI` struct keyed by function name
+- [ ] Add `DecodeFunctionOutputs(outputs []Member, felts []*felt.Felt) (map[string]any, error)` to `internal/abi/decoder.go` — decodes the flat `[]*felt.Felt` return value into a typed `map[string]any` using the same offset-tracking pattern as `DecodeEvent`. Output member names become map keys
+- [ ] Add `EncodeFunctionCalldata(inputs []Member, args []string) ([]*felt.Felt, error)` to a new `internal/abi/encoder.go` — converts hex string calldata from config into `[]*felt.Felt` for the RPC call. For the static-calldata-only scope, this is a simple hex-to-felt conversion per argument
+- [ ] Unit tests: `ViewConfig` validation (valid/invalid intervals, missing fields, bad calldata), `DecodeFunctionOutputs` with various return types (single felt, u256, struct, array), `EncodeFunctionCalldata` with hex strings, provider `Call` with mock RPC
+
+**Implementation Notes**:
+- The `FunctionDef` extraction reuses the existing ABI parser's 3-pass architecture. In pass 3 (where events are extracted), also extract function entries where `Type == "function"` and `StateMutability == "view"`. Non-view functions (external/constructor) are ignored.
+- `DecodeFunctionOutputs` is structurally identical to `DecodeEventData` — both walk a `[]Member` definition and consume felts from an offset. The difference is that function outputs use the `outputs` field from the ABI instead of `data` members. Consider extracting a shared `decodeMembers(members []Member, felts []*felt.Felt, offset *int)` helper to avoid duplication.
+- The provider `Call` method uses `rpc.BlockID{Tag: "latest"}` as the default block parameter. The poller (3.20) will pass this in.
+- `starknet.go`'s `rpc.Provider` already has a `Call(ctx, FunctionCall, BlockID)` method — ibis just needs to expose it through `StarknetProvider`. The `FunctionCall` struct takes `ContractAddress`, `EntryPointSelector`, and `Calldata` as `*felt.Felt` values.
+- Entry point selectors for functions use the same `sn_keccak(function_name)` as event selectors — reuse `ComputeSelector` from `internal/abi/selector.go`.
+- Config YAML shape for views:
+  ```yaml
+  contracts:
+    - name: PriceOracle
+      address: "0x049d36570d4e46..."
+      abi: fetch
+      events:
+        - name: PriceUpdated
+          table:
+            type: log
+      views:
+        - function: get_price
+          calldata: ["0x4554480000000000000000000000000000000000000000000000000000000000"]
+          interval: 30s
+          table:
+            type: unique
+            unique_key: _view_key
+        - function: total_supply
+          interval: 5m
+          table:
+            type: log
+  ```
+- For `unique` view tables, the `unique_key` field identifies which output column to use as the deduplication key. A special convention `_view_key` can be used to mean "single-row, always overwrite" (the poller generates a constant key value).
+
+### 3.20 View Function Poller & Engine Integration
+
+**Description**: Build the polling engine that periodically calls view functions via `starknet_call`, decodes results using the ABI infrastructure from 3.19, stores them as regular table operations, and integrates with ibis's existing engine lifecycle (startup, shutdown, reorg handling). View function tables are registered with the same schema system as event tables, so they automatically get REST API endpoints, SSE streaming, and query support with zero additional API code.
+
+**Requirements**:
+- [ ] Create `internal/engine/poller.go` with a `ViewPoller` struct that manages periodic `starknet_call` polling for all configured view functions across all contracts
+- [ ] `ViewPoller.Setup(contracts, provider, store)` — for each contract's `ViewConfig` entries: resolve the `FunctionDef` from the parsed ABI, compute the entry point selector, parse calldata from config hex strings, parse the polling interval, and build the `TableSchema` for the view's results
+- [ ] `ViewPoller.Run(ctx)` — spawn one goroutine per view function, each running a `time.Ticker` at the configured interval. On each tick: call `provider.Call()` with `BlockID{Tag: "latest"}`, decode the result via `DecodeFunctionOutputs`, build a `store.Operation`, and call `store.ApplyOperations`. Clean shutdown via context cancellation
+- [ ] Add startup jitter (up to 10% of the interval) per view function goroutine to spread RPC load and avoid thundering herd on startup
+- [ ] Schema generation: extend `internal/schema/generator.go` with `BuildViewSchema(contractName string, funcDef *abi.FunctionDef, viewCfg config.ViewConfig) *types.TableSchema` — maps function output members to table columns using the same `CairoTypeToColumnType` as events. Adds metadata columns: `block_number`, `timestamp`, `_view_key` (synthetic poll identifier). Table name follows `{contract}_{function_name}` convention
+- [ ] For `unique` table views: each poll overwrites the previous row (keyed by `unique_key` from config). For `log` table views: each poll appends a new row with the block number at poll time
+- [ ] Integrate `ViewPoller` into `Engine.Run()`: create and start the poller alongside the event subscriber. The poller shares the engine's `store`, `provider`, and `context` but runs independently of event processing
+- [ ] Wire view schemas into `Engine.Setup()` so they are included in `Engine.Schemas()` — this ensures the API server registers them and they appear in `/v1/status`
+- [ ] Reorg handling: when the engine's `handleReorg` fires, signal the `ViewPoller` to immediately re-poll all view functions (re-query current state rather than reverting operation pairs). Use a channel or callback from the engine's reorg handler
+- [ ] Skip-if-busy: if a poll tick fires while the previous RPC call for that function is still in flight, skip the tick and log a debug message. Use a non-blocking channel send or `sync.Mutex` per function
+- [ ] Error resilience: transient RPC failures (connection reset, timeout, 429) do not terminate the polling goroutine. Log at warn level, increment an error counter, and continue on the next tick. After 10 consecutive failures, log at error level
+- [ ] Record `block_number` from a `provider.BlockNumber()` call alongside each poll result, so the stored data is anchored to a specific chain height
+- [ ] Add view function status to the `/v1/status` endpoint: for each view function, report `function_name`, `contract`, `interval`, `last_poll_block`, `last_poll_time`, `consecutive_errors`
+- [ ] Unit tests: `ViewPoller` lifecycle (setup, run, shutdown), schema generation for view functions, mock RPC returning known felts and verifying decoded + stored values, skip-if-busy behavior, reorg re-poll trigger
+
+**Implementation Notes**:
+- The `ViewPoller` follows the same lifecycle pattern as `provider.EventSubscriber`: created during setup, started as a goroutine in `Run()`, stopped via context cancellation. It does NOT share the `e.events` channel — view results go directly to `store.ApplyOperations`.
+- For `unique` view tables, the operation is always `OpUpdate` (or `OpInsert` on first poll). The `Key` is the `unique_key` value from the decoded output. For the common single-value case (e.g., `total_supply`), use `_view_key: "latest"` as a constant key so there's always exactly one row.
+- For `log` view tables, the operation is always `OpInsert` with key `"{block_number}:{poll_index}"` following the same pattern as event log tables.
+- Reorg re-poll strategy: the engine passes a `reorgChan chan struct{}` to the `ViewPoller`. When a reorg notification arrives, the engine sends on this channel. Each view goroutine selects on both its ticker and the reorg channel; on reorg signal, it immediately re-polls regardless of the interval.
+- Duration parsing: use `time.ParseDuration(viewCfg.Interval)` during `ViewPoller.Setup()`. The config validation (3.19) already guarantees this parses successfully.
+- The `/v1/status` endpoint already reports per-contract info via `engine.Contracts()`. Extend this to include view function metadata by adding a `Views []ViewStatus` field to `ContractInfo` or a separate `ViewFunctions` section in the status response.
+- View tables participate in the existing API routing automatically: `GET /v1/PriceOracle/get_price` returns the latest polled value (for unique tables) or historical poll snapshots (for log tables). No new API handler code is needed — the parametric `{contract}/{event}` routes already match.
+- For factory contracts with views, each child contract can inherit view configs from the factory template. The poller spawns per-child goroutines. With `shared_tables: true`, all children's poll results go to the same table with a `contract_address` discriminator column.
+- Consider adding a `GET /v1/{contract}/{function}/poll` endpoint later (not in this task) that triggers an immediate on-demand poll — useful for debugging and testing.
+
+### 3.21 Configurable UDC Address for Discover Mode
+
+**Description**: The discover feature hardcodes the UDC (Universal Deployer Contract) address to `0x04a64cd09...`, which works on mainnet and Sepolia but fails silently on `starknet-devnet-rs` and custom appchains where the UDC lives at a different address. This makes class-hash-based contract discovery unusable for local development and testing. Adding a configurable `udc_address` field unblocks devnet users and anyone running Starknet appchains with non-standard UDC deployments.
+
+**Requirements**:
+- [ ] Add optional `UDCAddress` field (`yaml:"udc_address,omitempty"`) to `IndexerConfig` in `internal/config/config.go`
+- [ ] In `applyDefaults()`, set `UDCAddress` to the current hardcoded constant (`0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b050221`) when the field is empty
+- [ ] Config validation: if `udc_address` is provided, validate it as a hex hash via the existing `validateHexHash` helper
+- [ ] Update `setupDiscovery()` in `internal/engine/discover.go` to read `e.cfg.Indexer.UDCAddress` instead of the `UDCAddress` constant
+- [ ] Keep the `UDCAddress` constant as the exported default for programmatic use, but the engine must prefer the config value
+- [ ] Add `udc_address` to the example discover config in `configs/` so users can see the option
+- [ ] Unit tests: verify custom UDC address flows through config loading, validation, and into `discoveryState.udcAddress`; verify default is applied when omitted; verify invalid hex is rejected
+
+**Implementation Notes**:
+- The change is minimal: one new field on `IndexerConfig`, a default in `applyDefaults()`, a validation check, and a one-line change in `setupDiscovery()` to use `e.cfg.Indexer.UDCAddress` instead of the constant. The existing `discoveryState.udcAddress` field already holds a `*felt.Felt` parsed at setup time — just change what string it parses from.
+- Place `udc_address` under `indexer:` (not under `discover:`) because a single ibis instance uses one UDC address for all class-hash discoveries. Multiple UDC addresses per discover entry is not a real-world need — devnets and appchains each have exactly one UDC.
+- The `starknet-devnet-rs` UDC address (`0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf`) emits the same `ContractDeployed` event with the same key/data layout, so no decoder changes are needed.
+- Existing tests in `discover_test.go` that reference `UDCAddress` directly should continue to work since the default fills in the same value. New tests should verify that a custom address propagates correctly.
+- Config YAML shape:
+  ```yaml
+  indexer:
+    start_block: 0
+    udc_address: "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf"
+
+  discover:
+    - class_hash: "0x47a9dc..."
+      abi: fetch
+      events:
+        - name: "*"
+          table:
+            type: log
+  ```
+
 ---
 
 ## Phase 4: Future

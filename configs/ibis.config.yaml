@@ -33,6 +33,7 @@ indexer:
   start_block: 0       # 0 = start from latest block, or specify a block number
   pending_blocks: true  # Index pre-confirmed (pending) blocks
   batch_size: 10        # Blocks per batch during backfill
+  # udc_address: "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf"  # Override UDC address for devnet/appchains (default: mainnet/Sepolia UDC)
 
 # Contracts to index
 contracts:
