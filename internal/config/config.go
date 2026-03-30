@@ -46,9 +46,9 @@ type APIConfig struct {
 }
 
 type IndexerConfig struct {
-	StartBlock    uint64 `yaml:"start_block"`
-	PendingBlocks bool   `yaml:"pending_blocks"`
-	BatchSize     int    `yaml:"batch_size"`
+	StartBlock    *uint64 `yaml:"start_block"`
+	PendingBlocks bool    `yaml:"pending_blocks"`
+	BatchSize     int     `yaml:"batch_size"`
 }
 
 type ContractConfig struct {
@@ -56,7 +56,7 @@ type ContractConfig struct {
 	Address    string        `yaml:"address" json:"address"`
 	ABI        string        `yaml:"abi" json:"abi"`
 	Events     []EventConfig `yaml:"events" json:"events"`
-	StartBlock uint64        `yaml:"start_block,omitempty" json:"start_block,omitempty"`
+	StartBlock *uint64       `yaml:"start_block,omitempty" json:"start_block,omitempty"`
 	Dynamic    bool          `yaml:"-" json:"dynamic,omitempty"`
 
 	// Factory configuration for contracts that deploy child contracts.
@@ -213,3 +213,6 @@ func (c *Config) IsWSS() bool {
 	scheme := c.RPCScheme()
 	return scheme == "wss" || scheme == "ws"
 }
+
+// Uint64Ptr returns a pointer to the given uint64 value.
+func Uint64Ptr(v uint64) *uint64 { return &v }

@@ -272,20 +272,23 @@ func (e *Engine) RegisterContract(ctx context.Context, cc *config.ContractConfig
 
 	// Spawn subscription if the engine is running.
 	if e.subscriber != nil && e.runCtx != nil {
-		startBlock := cc.StartBlock
-		if startBlock == 0 {
+		resolvedStart := cc.StartBlock
+		if resolvedStart == nil {
+			resolvedStart = e.cfg.Indexer.StartBlock // global fallback
+		}
+		if resolvedStart == nil {
 			latest, err := e.provider.BlockNumber(ctx)
 			if err != nil {
 				e.logger.Warn("failed to get latest block for dynamic contract, using 0",
 					"contract", cc.Name, "error", err)
 			} else {
-				startBlock = latest
+				resolvedStart = &latest
 			}
 		}
 
 		sub := provider.ContractSubscription{
 			Address:    address,
-			StartBlock: startBlock,
+			StartBlock: derefUint64(resolvedStart),
 		}
 
 		// Build key filters if no wildcard.
@@ -304,7 +307,7 @@ func (e *Engine) RegisterContract(ctx context.Context, cc *config.ContractConfig
 		e.subscriber.AddContract(e.runCtx, sub)
 		e.logger.Info("started subscription for dynamic contract",
 			"contract", cc.Name,
-			"start_block", startBlock,
+			"start_block", derefUint64(resolvedStart),
 		)
 	}
 
@@ -567,7 +570,7 @@ func (e *Engine) AllContracts() []config.ContractConfig {
 
 // determineStartBlocks computes the starting block for each contract independently.
 // Logic per contract: max(persisted_cursor + 1, config_start_block).
-// If both are 0, starts from the latest chain block.
+// If no start block is configured and cursor is 0, starts from the latest chain block.
 func (e *Engine) determineStartBlocks(ctx context.Context) (map[string]uint64, error) {
 	result := make(map[string]uint64, len(e.contracts))
 
@@ -582,13 +585,14 @@ func (e *Engine) determineStartBlocks(ctx context.Context) (map[string]uint64, e
 		}
 
 		// Use per-contract start block if set (e.g., factory children use their deploy block),
-		// otherwise fall back to global indexer start block.
+		// otherwise fall back to global indexer start block. nil means "not configured".
 		configStart := cs.config.StartBlock
-		if configStart == 0 {
+		if configStart == nil {
 			configStart = e.cfg.Indexer.StartBlock
 		}
 
-		if configStart == 0 && cursor == 0 {
+		if configStart == nil && cursor == 0 {
+			// No start block configured and no cursor — use chain tip.
 			if !latestFetched {
 				latest, err := e.provider.BlockNumber(ctx)
 				if err != nil {
@@ -598,17 +602,44 @@ func (e *Engine) determineStartBlocks(ctx context.Context) (map[string]uint64, e
 				latestFetched = true
 			}
 			result[cs.config.Name] = latestBlock
+			e.logger.Info("start block resolved",
+				"contract", cs.config.Name,
+				"source", "chain_tip",
+				"value", latestBlock,
+			)
 			continue
 		}
 
-		startBlock := configStart
+		var startBlock uint64
+		if configStart != nil {
+			startBlock = *configStart
+		}
 		if cursor > 0 && cursor+1 > startBlock {
 			startBlock = cursor + 1
 		}
+
+		source := "config"
+		if cursor > 0 && cursor+1 > derefUint64(configStart) {
+			source = "cursor"
+		}
+		e.logger.Info("start block resolved",
+			"contract", cs.config.Name,
+			"source", source,
+			"value", startBlock,
+		)
+
 		result[cs.config.Name] = startBlock
 	}
 
 	return result, nil
+}
+
+// derefUint64 safely dereferences a *uint64, returning 0 if nil.
+func derefUint64(p *uint64) uint64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 // buildSubscriptions creates ContractSubscription entries for the subscriber.

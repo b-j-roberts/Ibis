@@ -135,7 +135,7 @@ func makeFactoryEvent(factoryAddr *felt.Felt, blockNumber uint64, token0, token1
 func newFactoryTestEngine(st store.Store, factoryCS *contractState) *Engine {
 	return &Engine{
 		cfg: &config.Config{
-			Indexer: config.IndexerConfig{StartBlock: 0},
+			Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(0)},
 		},
 		store:        st,
 		logger:       noopLogger(),
@@ -264,8 +264,8 @@ func TestProcessEvent_FactoryEventRegistersChild(t *testing.T) {
 		if cs.config.FactoryName != "JediSwapFactory" {
 			t.Fatalf("child factory name mismatch: expected JediSwapFactory, got %s", cs.config.FactoryName)
 		}
-		if cs.config.StartBlock != 100 {
-			t.Fatalf("child start block mismatch: expected 100, got %d", cs.config.StartBlock)
+		if cs.config.StartBlock == nil || *cs.config.StartBlock != 100 {
+			t.Fatalf("child start block mismatch: expected 100, got %v", cs.config.StartBlock)
 		}
 		if !cs.config.Dynamic {
 			t.Fatal("factory child should be marked as dynamic")
@@ -496,7 +496,7 @@ func TestEventLoop_FactoryEventRegistersChildAndProcessesChildEvents(t *testing.
 
 	e := &Engine{
 		cfg: &config.Config{
-			Indexer: config.IndexerConfig{StartBlock: 0},
+			Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(0)},
 		},
 		store:        st,
 		logger:       noopLogger(),
@@ -732,7 +732,7 @@ func TestMultipleFactoryContracts(t *testing.T) {
 
 	e := &Engine{
 		cfg: &config.Config{
-			Indexer: config.IndexerConfig{StartBlock: 0},
+			Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(0)},
 		},
 		store:        st,
 		logger:       noopLogger(),
@@ -893,8 +893,8 @@ func TestFactoryRestart_ChildrenSurviveRestart(t *testing.T) {
 	if dc1.Address != pair1Addr.String() {
 		t.Fatalf("child 1 Address: expected %s, got %s", pair1Addr.String(), dc1.Address)
 	}
-	if dc1.StartBlock != 100 {
-		t.Fatalf("child 1 StartBlock: expected 100, got %d", dc1.StartBlock)
+	if dc1.StartBlock == nil || *dc1.StartBlock != 100 {
+		t.Fatalf("child 1 StartBlock: expected 100, got %v", dc1.StartBlock)
 	}
 	if dc1.FactoryMeta == nil {
 		t.Fatal("child 1 FactoryMeta is nil")
@@ -991,7 +991,7 @@ func TestFactoryChildConfig_JSONRoundTrip(t *testing.T) {
 		Events: []config.EventConfig{
 			{Name: "*", Table: config.TableConfig{Type: "log"}},
 		},
-		StartBlock:  100,
+		StartBlock:  config.Uint64Ptr(100),
 		Dynamic:     true,
 		FactoryName: "JediSwapFactory",
 		FactoryMeta: map[string]any{
@@ -1017,8 +1017,8 @@ func TestFactoryChildConfig_JSONRoundTrip(t *testing.T) {
 	if restored.Address != original.Address {
 		t.Fatalf("Address: expected %s, got %s", original.Address, restored.Address)
 	}
-	if restored.StartBlock != original.StartBlock {
-		t.Fatalf("StartBlock: expected %d, got %d", original.StartBlock, restored.StartBlock)
+	if restored.StartBlock == nil || original.StartBlock == nil || *restored.StartBlock != *original.StartBlock {
+		t.Fatalf("StartBlock: expected %v, got %v", original.StartBlock, restored.StartBlock)
 	}
 
 	// Factory fields — these must survive the round-trip.

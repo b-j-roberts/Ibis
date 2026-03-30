@@ -621,8 +621,9 @@ func TestDetermineStartBlocks_FromCursor(t *testing.T) {
 	cs := testContractState(contractAddr, "mytoken", []*abi.EventDef{eventDef}, types.TableTypeLog)
 
 	e := &Engine{
-		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: 50}},
+		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(50)}},
 		store:     st,
+		logger:    noopLogger(),
 		contracts: []*contractState{cs},
 	}
 
@@ -645,8 +646,9 @@ func TestDetermineStartBlocks_FromConfig(t *testing.T) {
 	cs := testContractState(contractAddr, "mytoken", []*abi.EventDef{eventDef}, types.TableTypeLog)
 
 	e := &Engine{
-		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: 500}},
+		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(500)}},
 		store:     st,
+		logger:    noopLogger(),
 		contracts: []*contractState{cs},
 	}
 
@@ -672,8 +674,9 @@ func TestDetermineStartBlocks_PerContract(t *testing.T) {
 	csB := testContractState(addrB, "contract_b", []*abi.EventDef{eventDef}, types.TableTypeLog)
 
 	e := &Engine{
-		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: 50}},
+		cfg:       &config.Config{Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(50)}},
 		store:     st,
+		logger:    noopLogger(),
 		contracts: []*contractState{csA, csB},
 	}
 

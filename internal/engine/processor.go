@@ -18,22 +18,26 @@ func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error
 	// Find which contract this event belongs to.
 	cs := e.findContractByAddress(raw.ContractAddress)
 	if cs == nil {
-		return nil // Unknown contract, skip.
+		e.logger.Debug("skipped event: unknown contract", "address", raw.ContractAddress)
+		return nil
 	}
 
 	// Match selector from keys[0].
 	if len(raw.Keys) == 0 {
+		e.logger.Debug("skipped event: no keys", "contract", cs.config.Name)
 		return nil
 	}
 	eventDef := cs.registry.MatchSelector(raw.Keys[0])
 	if eventDef == nil {
-		return nil // Unknown event selector, skip.
+		e.logger.Debug("skipped event: unknown selector", "selector", raw.Keys[0], "contract", cs.config.Name)
+		return nil
 	}
 
 	// Check if this event is configured for indexing.
 	schema, ok := cs.schemas[eventDef.Name]
 	if !ok {
-		return nil // Not configured, skip.
+		e.logger.Debug("skipped event: not configured", "event", eventDef.Name, "contract", cs.config.Name)
+		return nil
 	}
 
 	// Decode event fields from keys and data.

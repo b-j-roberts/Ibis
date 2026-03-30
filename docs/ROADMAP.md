@@ -66,39 +66,6 @@
 - Document that users should prefer explicit ABI paths for proxies with known implementations
 - Proxy resolution runs once at startup; for runtime upgrades, see task 3.13 (Contract Upgrade Tracking)
 
-### 3.9 Contract Discovery by Class Hash
-
-**Description**: Watch for new contract deployments matching a specified class hash and automatically register them for indexing. Monitors the Universal Deployer Contract (UDC) for `ContractDeployed` events filtered by class hash. This enables indexing all instances of a specific contract type across the network.
-
-**Requirements**:
-- [ ] Config section for class hash watches:
-  ```yaml
-  discover:
-    - class_hash: "0xabc123..."
-      group: my_tokens          # optional: group discovered contracts
-      abi: fetch                 # or explicit path
-      events:
-        - name: "*"
-          table:
-            type: log
-  ```
-- [ ] Subscribe to UDC events (`ContractDeployed`) and filter by `classHash` field in the event data
-- [ ] Extract deployed contract address from UDC event and auto-register for indexing via dynamic registration (3.7)
-- [ ] Apply the configured ABI and event template to all discovered contracts
-- [ ] Backfill: on startup, scan historical UDC events for matching class hashes to discover existing contracts
-- [ ] Discovered contracts tracked with deployment block for targeted backfill (3.8)
-- [ ] Reorg safety: if a `ContractDeployed` event is reverted, deregister the child and revert its indexed events
-- [ ] Auto-generate contract names: `{class_hash_short}_{address_short}` or configurable naming template
-
-**Implementation Notes**:
-- UDC address on mainnet/Sepolia: `0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b050221`
-- UDC event: `ContractDeployed(address: ContractAddress, deployer: ContractAddress, unique: bool, classHash: ClassHash, calldata: Span<felt252>, salt: felt252)`
-- Filter UDC subscription by `keys[0]` = `sn_keccak("ContractDeployed")` — then match `classHash` field in decoded event data
-- This is a network-level discovery mechanism (vs. factory in 3.10 which is contract-specific)
-- All discovered contracts share the same ABI (same class hash = same code)
-- Depends on: dynamic registration (3.7) and per-contract cursors (3.8)
-- Not all contracts are deployed via UDC — some use `deploy_syscall` directly from factory contracts (covered by 3.10)
-
 ### 3.13 Contract Upgrade Tracking
 
 **Description**: Track `replace_class_syscall` upgrades on indexed contracts. When a contract's class hash changes, re-fetch its ABI and update event decoding schemas at the upgrade boundary. Essential for long-running indexers on upgradeable contracts using OpenZeppelin's Upgradeable component.
@@ -231,6 +198,32 @@
 - The reconnect loop should track the last received SSE event ID and send it as `Last-Event-ID` on reconnect. The server's `replayEvents` in `sse.go` already handles this for gap-free delivery.
 - Filter flags map to query params: `--filter "block_number=gte.100"` becomes `?block_number=gte.100`, and `--contract-address 0x123` becomes `?contract_address=eq.0x123`. This matches the Supabase-style filtering already used by the REST endpoints (see `parseFiltersFromURL` in `api/query.go`).
 - Signal handling: use `signal.NotifyContext` with `os.Interrupt` and `syscall.SIGTERM` to get a cancellable context, then pass it to the HTTP request.
+
+### 3.18 Contract Preset System
+
+**Description**: Provide built-in preset configurations for common Starknet contract standards (ERC20, ERC721, ERC1155). A single `preset: erc20` field in a contract config auto-populates events, table types, aggregation tables, and ships an embedded ABI — eliminating boilerplate for the most common indexing use cases. Presets are composable: users can override any default with explicit event configs.
+
+**Requirements**:
+- [ ] Add optional `Preset` field to `ContractConfig` in `internal/config/config.go`
+- [ ] Create `internal/config/presets/` package with a `PresetDefinition` struct containing: name, description, embedded ABI JSON (`[]byte`), default `[]EventConfig`, and optional `*FactoryConfig`
+- [ ] Implement `erc20` preset with embedded OZ Cairo ERC20 ABI, events: `Transfer` (log) + `Approval` (log) + a `Transfer` aggregation table tracking `total_volume` (sum of `value`) and `transfer_count` (count)
+- [ ] Implement `erc721` preset with embedded OZ Cairo ERC721 ABI, events: `Transfer` (log) + `Approval` (log) + `ApprovalForAll` (log) + aggregation tracking `transfer_count` (count)
+- [ ] Implement `erc1155` preset with embedded OZ Cairo ERC1155 ABI, events: `TransferSingle` (log) + `TransferBatch` (log) + `ApprovalForAll` (log) + aggregation tracking `transfer_count` (count)
+- [ ] Preset application in `Config.Load()`: after YAML parsing and `applyDefaults()`, before `Validate()` — merge preset defaults into `ContractConfig`, with explicit user config always taking precedence
+- [ ] When preset provides an embedded ABI and user has not set `abi:`, use the embedded ABI directly (skip chain fetch). If user explicitly sets `abi: fetch` or a file path, that overrides the preset ABI
+- [ ] Config validation: reject unknown preset names with a clear error listing available presets
+- [ ] Add `ibis presets` (or `ibis init --preset`) CLI subcommand to list available presets with descriptions and their default event configurations
+- [ ] Unit tests: preset application, override merging (explicit events override preset defaults), unknown preset rejection, embedded ABI loading
+- [ ] Add example configs in `configs/` demonstrating preset usage for each standard
+
+**Implementation Notes**:
+- Embed ABI JSON files using Go's `embed` package (`//go:embed` directives) in `internal/config/presets/`. Source canonical ABIs from OpenZeppelin Cairo contracts (latest stable release). Store as `abi_erc20.json`, `abi_erc721.json`, `abi_erc1155.json`.
+- Preset merge logic: if `cc.Events` is empty, use preset events entirely. If `cc.Events` is non-empty, the user's events fully replace the preset events (not merged per-event). This keeps the override model simple and predictable.
+- For aggregation tables in presets, use a naming convention like `{contract_name}_transfer_stats` to avoid colliding with the log table `{contract_name}_transfer`. This may require supporting multiple table configs per event name, or using a separate event entry with a `table_name` override.
+- The embedded ABI approach means presets work offline and without an RPC endpoint — useful for `ibis init` and config validation. The ABI is the canonical OZ Cairo ABI; if a contract has a custom ABI (e.g., additional events beyond the standard), users should use `abi: fetch` to get the full ABI.
+- Be aware of the dual ERC20 event layout on Starknet: legacy contracts (early StarkGate ETH/STRK) put `from`/`to` in the data array, while modern OZ Cairo contracts put them in keys. The embedded ABI should match the modern layout; for legacy contracts, users override with `abi: fetch`.
+- Preset registry is a simple `map[string]PresetDefinition` in Go code — no external files or plugin system needed. Future presets (AMM, governance) can be added by extending this map.
+- Config YAML shape: `contracts: [{ name: STRK, address: "0x...", preset: erc20 }]` — that's all a user needs for a fully functional ERC20 indexer with transfer analytics.
 
 ---
 

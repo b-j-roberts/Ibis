@@ -114,6 +114,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/admin/contracts", s.adminAuth(s.handleAdminListContracts))
 	mux.HandleFunc("PUT /v1/admin/contracts/{name}", s.adminAuth(s.handleAdminUpdateContract))
 
+	// Discover endpoint (literal "discover" takes priority over {contract} wildcard).
+	mux.HandleFunc("GET /v1/discover/{classHash}/contracts", s.handleDiscoverContracts)
+
 	// Factory children endpoints (literal "children" takes priority over {event} wildcard).
 	mux.HandleFunc("GET /v1/{factory}/children/count", s.handleFactoryChildCount)
 	mux.HandleFunc("GET /v1/{factory}/children", s.handleFactoryChildren)

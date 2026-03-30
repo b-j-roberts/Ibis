@@ -131,7 +131,7 @@ func (e *Engine) handleDiscoveryEvent(ctx context.Context, raw *provider.RawEven
 		Address:           contractAddr,
 		ABI:               dc.ABI,
 		Events:            dc.Events,
-		StartBlock:        raw.BlockNumber,
+		StartBlock:        config.Uint64Ptr(raw.BlockNumber),
 		DiscoverClassHash: dc.ClassHash,
 	}
 
@@ -235,7 +235,7 @@ func (e *Engine) discoveryStartBlock(ctx context.Context) uint64 {
 	if err == nil && cursor > 0 {
 		return cursor + 1
 	}
-	return e.cfg.Indexer.StartBlock
+	return derefUint64(e.cfg.Indexer.StartBlock)
 }
 
 // reorgDiscoveredContracts deregisters discovered contracts whose deploy block
@@ -248,9 +248,10 @@ func (e *Engine) reorgDiscoveredContracts(ctx context.Context, startBlock, endBl
 	var toDeregister []string
 	e.mu.RLock()
 	for _, cs := range e.contracts {
+		sb := derefUint64(cs.config.StartBlock)
 		if cs.config.DiscoverClassHash != "" &&
-			cs.config.StartBlock >= startBlock &&
-			cs.config.StartBlock <= endBlock {
+			sb >= startBlock &&
+			sb <= endBlock {
 			toDeregister = append(toDeregister, cs.config.Name)
 		}
 	}
@@ -286,10 +287,35 @@ func (e *Engine) DiscoveredContracts() []ContractInfo {
 			Address:      cs.config.Address,
 			Events:       len(cs.config.Events),
 			CurrentBlock: cursor,
-			StartBlock:   cs.config.StartBlock,
+			StartBlock:   derefUint64(cs.config.StartBlock),
 			Status:       ContractStatusActive,
 			Dynamic:      true,
 		})
 	}
 	return discovered
+}
+
+// DiscoveredContractsByClassHash returns information about contracts discovered
+// via class hash watching that match the given class hash.
+func (e *Engine) DiscoveredContractsByClassHash(classHash string) []ContractInfo {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	var filtered []ContractInfo
+	for _, cs := range e.contracts {
+		if cs.config.DiscoverClassHash != classHash {
+			continue
+		}
+		cursor, _ := e.store.GetCursor(context.Background(), cs.config.Name)
+		filtered = append(filtered, ContractInfo{
+			Name:         cs.config.Name,
+			Address:      cs.config.Address,
+			Events:       len(cs.config.Events),
+			CurrentBlock: cursor,
+			StartBlock:   derefUint64(cs.config.StartBlock),
+			Status:       ContractStatusActive,
+			Dynamic:      true,
+		})
+	}
+	return filtered
 }

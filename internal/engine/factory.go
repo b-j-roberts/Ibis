@@ -68,7 +68,7 @@ func (e *Engine) handleFactoryEvent(ctx context.Context, cs *contractState, deco
 		Address:      childAddr,
 		ABI:          childABI,
 		Events:       factory.ChildEvents,
-		StartBlock:   raw.BlockNumber,
+		StartBlock:   config.Uint64Ptr(raw.BlockNumber),
 		FactoryName:  cs.config.Name,
 		FactoryMeta:  meta,
 		SharedTables: factory.SharedTables,
@@ -196,7 +196,7 @@ func (e *Engine) registerSharedChild(ctx context.Context, factoryCS *contractSta
 	if e.subscriber != nil && e.runCtx != nil {
 		sub := provider.ContractSubscription{
 			Address:    address,
-			StartBlock: cc.StartBlock,
+			StartBlock: derefUint64(cc.StartBlock),
 		}
 
 		if !hasWildcardEvent(cc) {
@@ -273,7 +273,7 @@ func (e *Engine) registerWithABI(ctx context.Context, cc *config.ContractConfig,
 	if e.subscriber != nil && e.runCtx != nil {
 		sub := provider.ContractSubscription{
 			Address:    address,
-			StartBlock: cc.StartBlock,
+			StartBlock: derefUint64(cc.StartBlock),
 		}
 
 		// Build key filters if no wildcard.
@@ -359,7 +359,8 @@ func (e *Engine) reorgFactoryChildren(ctx context.Context, startBlock, endBlock 
 	var toDeregister []string
 	e.mu.RLock()
 	for _, cs := range e.contracts {
-		if cs.config.FactoryName != "" && cs.config.StartBlock >= startBlock && cs.config.StartBlock <= endBlock {
+		sb := derefUint64(cs.config.StartBlock)
+		if cs.config.FactoryName != "" && sb >= startBlock && sb <= endBlock {
 			toDeregister = append(toDeregister, cs.config.Name)
 		}
 	}
@@ -394,7 +395,7 @@ func (e *Engine) FactoryChildren(factoryName string) []ContractInfo {
 				Address:      cs.config.Address,
 				Events:       len(cs.config.Events),
 				CurrentBlock: cursor,
-				StartBlock:   cs.config.StartBlock,
+				StartBlock:   derefUint64(cs.config.StartBlock),
 				Status:       ContractStatusActive,
 				Dynamic:      true,
 				FactoryName:  cs.config.FactoryName,

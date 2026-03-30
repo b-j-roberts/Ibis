@@ -186,7 +186,7 @@ func TestDynamicContractPersistence(t *testing.T) {
 		Name:       "DynContract",
 		Address:    "0x789",
 		ABI:        "fetch",
-		StartBlock: 100,
+		StartBlock: config.Uint64Ptr(100),
 		Dynamic:    true,
 		Events: []config.EventConfig{
 			{Name: "*", Table: config.TableConfig{Type: "log"}},
@@ -213,8 +213,8 @@ func TestDynamicContractPersistence(t *testing.T) {
 	if contracts[0].Address != "0x789" {
 		t.Errorf("expected address 0x789, got %s", contracts[0].Address)
 	}
-	if contracts[0].StartBlock != 100 {
-		t.Errorf("expected start_block 100, got %d", contracts[0].StartBlock)
+	if contracts[0].StartBlock == nil || *contracts[0].StartBlock != 100 {
+		t.Errorf("expected start_block 100, got %v", contracts[0].StartBlock)
 	}
 	if len(contracts[0].Events) != 1 {
 		t.Errorf("expected 1 event, got %d", len(contracts[0].Events))
@@ -386,7 +386,7 @@ func TestAdminContractJSONSerialization(t *testing.T) {
 		Name:       "TestContract",
 		Address:    "0xabc",
 		ABI:        "fetch",
-		StartBlock: 500,
+		StartBlock: config.Uint64Ptr(500),
 		Dynamic:    true,
 		Events: []config.EventConfig{
 			{
@@ -421,8 +421,8 @@ func TestAdminContractJSONSerialization(t *testing.T) {
 	if decoded.Address != cc.Address {
 		t.Errorf("Address: expected %s, got %s", cc.Address, decoded.Address)
 	}
-	if decoded.StartBlock != cc.StartBlock {
-		t.Errorf("StartBlock: expected %d, got %d", cc.StartBlock, decoded.StartBlock)
+	if decoded.StartBlock == nil || cc.StartBlock == nil || *decoded.StartBlock != *cc.StartBlock {
+		t.Errorf("StartBlock: expected %v, got %v", cc.StartBlock, decoded.StartBlock)
 	}
 	if len(decoded.Events) != len(cc.Events) {
 		t.Errorf("Events: expected %d, got %d", len(cc.Events), len(decoded.Events))

@@ -29,6 +29,9 @@ const (
 
 	// Default number of blocks per polling query.
 	defaultBlocksPerQuery uint64 = 100
+
+	// rpcCallTimeout is the maximum duration for individual RPC calls.
+	rpcCallTimeout = 30 * time.Second
 )
 
 // wssSession represents an active WebSocket subscription session.
@@ -353,14 +356,18 @@ func (s *EventSubscriber) pollEvents(ctx context.Context, contract ContractSubsc
 
 	for {
 		if ctx.Err() != nil {
+			logger.Debug("polling stopped", "reason", ctx.Err())
 			return ctx.Err()
 		}
 
-		latestBlock, err := s.provider.BlockNumber(ctx)
+		rpcCtx, cancel := context.WithTimeout(ctx, rpcCallTimeout)
+		latestBlock, err := s.provider.BlockNumber(rpcCtx)
+		cancel()
 		if err != nil {
 			logger.Warn("failed to get block number", "error", err)
 			select {
 			case <-ctx.Done():
+				logger.Debug("polling stopped", "reason", ctx.Err())
 				return ctx.Err()
 			case <-time.After(tipPollInterval):
 				continue
@@ -371,6 +378,7 @@ func (s *EventSubscriber) pollEvents(ctx context.Context, contract ContractSubsc
 		if *lastBlock > latestBlock {
 			select {
 			case <-ctx.Done():
+				logger.Debug("polling stopped", "reason", ctx.Err())
 				return ctx.Err()
 			case <-time.After(tipPollInterval):
 				continue
@@ -383,28 +391,34 @@ func (s *EventSubscriber) pollEvents(ctx context.Context, contract ContractSubsc
 			endBlock = latestBlock
 		}
 
-		events, err := s.provider.GetEvents(ctx, GetEventsOptions{
+		rpcCtx, cancel = context.WithTimeout(ctx, rpcCallTimeout)
+		events, err := s.provider.GetEvents(rpcCtx, GetEventsOptions{
 			FromBlock: *lastBlock,
 			ToBlock:   endBlock,
 			Address:   contract.Address,
 			Keys:      contract.Keys,
 			ChunkSize: 1000,
 		})
+		cancel()
 		if err != nil {
 			logger.Warn("failed to get events", "error", err,
 				"from", *lastBlock, "to", endBlock)
 			select {
 			case <-ctx.Done():
+				logger.Debug("polling stopped", "reason", ctx.Err())
 				return ctx.Err()
 			case <-time.After(tipPollInterval):
 				continue
 			}
 		}
 
+		logger.Debug("polled block range", "from", *lastBlock, "to", endBlock, "events", len(events))
+
 		for _, evt := range events {
 			select {
 			case s.events <- evt:
 			case <-ctx.Done():
+				logger.Debug("polling stopped", "reason", ctx.Err())
 				return ctx.Err()
 			}
 		}
@@ -419,6 +433,7 @@ func (s *EventSubscriber) pollEvents(ctx context.Context, contract ContractSubsc
 
 		select {
 		case <-ctx.Done():
+			logger.Debug("polling stopped", "reason", ctx.Err())
 			return ctx.Err()
 		case <-time.After(interval):
 		}
@@ -442,13 +457,15 @@ func (s *EventSubscriber) Backfill(ctx context.Context, contract ContractSubscri
 			end = toBlock
 		}
 
-		events, err := s.provider.GetEvents(ctx, GetEventsOptions{
+		rpcCtx, cancel := context.WithTimeout(ctx, rpcCallTimeout)
+		events, err := s.provider.GetEvents(rpcCtx, GetEventsOptions{
 			FromBlock: current,
 			ToBlock:   end,
 			Address:   contract.Address,
 			Keys:      contract.Keys,
 			ChunkSize: 1000,
 		})
+		cancel()
 		if err != nil {
 			return fmt.Errorf("backfill events [%d, %d]: %w", current, end, err)
 		}

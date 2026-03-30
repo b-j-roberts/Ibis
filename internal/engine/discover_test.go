@@ -60,7 +60,7 @@ func makeUDCEvent(deployedAddr, classHash *felt.Felt, blockNumber uint64) provid
 func newDiscoveryTestEngine(st store.Store, classHash string) *Engine {
 	discoverCfg := testDiscoverConfig(classHash)
 	cfg := &config.Config{
-		Indexer:  config.IndexerConfig{StartBlock: 0},
+		Indexer:  config.IndexerConfig{StartBlock: config.Uint64Ptr(0)},
 		Discover: []config.DiscoverConfig{discoverCfg},
 	}
 
@@ -267,8 +267,8 @@ func TestHandleDiscoveryEvent_RegistersMatchingContract(t *testing.T) {
 	if cs.config.DiscoverClassHash != classHash {
 		t.Fatalf("expected DiscoverClassHash %s, got %s", classHash, cs.config.DiscoverClassHash)
 	}
-	if cs.config.StartBlock != 100 {
-		t.Fatalf("expected StartBlock 100, got %d", cs.config.StartBlock)
+	if cs.config.StartBlock == nil || *cs.config.StartBlock != 100 {
+		t.Fatalf("expected StartBlock 100, got %v", cs.config.StartBlock)
 	}
 	if !cs.config.Dynamic {
 		t.Fatal("expected Dynamic=true")
@@ -486,7 +486,7 @@ func TestDiscoveryStartBlock_FromCursor(t *testing.T) {
 	st.SetCursor(ctx, discoveryCursorName, 500)
 
 	e := &Engine{
-		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: 100}},
+		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(100)}},
 		store: st,
 	}
 
@@ -501,7 +501,7 @@ func TestDiscoveryStartBlock_FromConfig(t *testing.T) {
 	ctx := context.Background()
 
 	e := &Engine{
-		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: 200}},
+		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(200)}},
 		store: st,
 	}
 
@@ -516,7 +516,7 @@ func TestDiscoveryStartBlock_DefaultZero(t *testing.T) {
 	ctx := context.Background()
 
 	e := &Engine{
-		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: 0}},
+		cfg:   &config.Config{Indexer: config.IndexerConfig{StartBlock: config.Uint64Ptr(0)}},
 		store: st,
 	}
 
@@ -655,7 +655,7 @@ func TestDiscoveredContractConfig_JSONRoundTrip(t *testing.T) {
 		Address:           "0x5678abcd",
 		ABI:               "fetch",
 		Events:            []config.EventConfig{{Name: "*", Table: config.TableConfig{Type: "log"}}},
-		StartBlock:        100,
+		StartBlock:        config.Uint64Ptr(100),
 		Dynamic:           true,
 		DiscoverClassHash: "0xabcd1234",
 	}
@@ -677,8 +677,8 @@ func TestDiscoveredContractConfig_JSONRoundTrip(t *testing.T) {
 	if restored.Name != original.Name {
 		t.Fatalf("Name: expected %s, got %s", original.Name, restored.Name)
 	}
-	if restored.StartBlock != original.StartBlock {
-		t.Fatalf("StartBlock: expected %d, got %d", original.StartBlock, restored.StartBlock)
+	if restored.StartBlock == nil || *restored.StartBlock != *original.StartBlock {
+		t.Fatalf("StartBlock: expected %v, got %v", original.StartBlock, restored.StartBlock)
 	}
 	if !restored.Dynamic {
 		t.Fatal("Dynamic should survive JSON round-trip")
@@ -874,8 +874,8 @@ func TestHandleReorg_WithDiscoveredContracts(t *testing.T) {
 
 	// Verify the remaining contract was from block 100.
 	e.mu.RLock()
-	if e.contracts[0].config.StartBlock != 100 {
-		t.Fatalf("remaining contract should be from block 100, got %d", e.contracts[0].config.StartBlock)
+	if e.contracts[0].config.StartBlock == nil || *e.contracts[0].config.StartBlock != 100 {
+		t.Fatalf("remaining contract should be from block 100, got %v", e.contracts[0].config.StartBlock)
 	}
 	e.mu.RUnlock()
 }

@@ -414,8 +414,8 @@ contracts:
 	if cfg.API.Port != 9090 {
 		t.Errorf("api.port = %d, want 9090", cfg.API.Port)
 	}
-	if cfg.Indexer.StartBlock != 100000 {
-		t.Errorf("start_block = %d, want 100000", cfg.Indexer.StartBlock)
+	if cfg.Indexer.StartBlock == nil || *cfg.Indexer.StartBlock != 100000 {
+		t.Errorf("start_block = %v, want 100000", cfg.Indexer.StartBlock)
 	}
 	if len(cfg.Contracts[0].Events) != 3 {
 		t.Errorf("events count = %d, want 3", len(cfg.Contracts[0].Events))

@@ -465,7 +465,7 @@ func buildConfig(network, rpcURL, database string, contracts []config.ContractCo
 	cfg.API.Host = "0.0.0.0"
 	cfg.API.Port = 8080
 
-	cfg.Indexer.StartBlock = 0
+	cfg.Indexer.StartBlock = config.Uint64Ptr(0)
 	cfg.Indexer.PendingBlocks = true
 	cfg.Indexer.BatchSize = 10
 
@@ -555,8 +555,12 @@ func buildCleanYAML(cfg *config.Config) yaml.Node {
 
 	// Indexer.
 	idx := &yaml.Node{Kind: yaml.MappingNode}
+	startBlockVal := uint64(0)
+	if cfg.Indexer.StartBlock != nil {
+		startBlockVal = *cfg.Indexer.StartBlock
+	}
 	idx.Content = append(idx.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "start_block"}, scalar(fmt.Sprintf("%d", cfg.Indexer.StartBlock)),
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "start_block"}, scalar(fmt.Sprintf("%d", startBlockVal)),
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "pending_blocks"}, scalar(fmt.Sprintf("%t", cfg.Indexer.PendingBlocks)),
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "batch_size"}, scalar(fmt.Sprintf("%d", cfg.Indexer.BatchSize)),
 	)

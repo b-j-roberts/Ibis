@@ -104,7 +104,7 @@ func setupFactoryTestServer(t *testing.T) (*httptest.Server, *api.EventBus) {
 		Address:      "0xC001",
 		FactoryName:  "JediSwap",
 		FactoryMeta:  map[string]any{"token0": "0xETH", "token1": "0xUSDC"},
-		StartBlock:   100,
+		StartBlock:   config.Uint64Ptr(100),
 		SharedTables: true,
 		Dynamic:      true,
 	}, factorySchemas)
@@ -115,7 +115,7 @@ func setupFactoryTestServer(t *testing.T) (*httptest.Server, *api.EventBus) {
 		Address:      "0xC002",
 		FactoryName:  "JediSwap",
 		FactoryMeta:  map[string]any{"token0": "0xDAI", "token1": "0xUSDC"},
-		StartBlock:   105,
+		StartBlock:   config.Uint64Ptr(105),
 		SharedTables: true,
 		Dynamic:      true,
 	}, factorySchemas)

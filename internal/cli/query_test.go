@@ -654,7 +654,7 @@ func TestFactoryChildrenQuery(t *testing.T) {
 	child1 := &config.ContractConfig{
 		Name:        "MyFactory_pair_0x111",
 		Address:     "0x111",
-		StartBlock:  100,
+		StartBlock:  config.Uint64Ptr(100),
 		FactoryName: "MyFactory",
 		FactoryMeta: map[string]any{"token0": "0xAAA", "token1": "0xBBB"},
 		Events:      []config.EventConfig{{Name: "Swap"}},
@@ -662,7 +662,7 @@ func TestFactoryChildrenQuery(t *testing.T) {
 	child2 := &config.ContractConfig{
 		Name:        "MyFactory_pair_0x222",
 		Address:     "0x222",
-		StartBlock:  200,
+		StartBlock:  config.Uint64Ptr(200),
 		FactoryName: "MyFactory",
 		FactoryMeta: map[string]any{"token0": "0xCCC", "token1": "0xDDD"},
 		Events:      []config.EventConfig{{Name: "Swap"}},
@@ -671,7 +671,7 @@ func TestFactoryChildrenQuery(t *testing.T) {
 	other := &config.ContractConfig{
 		Name:        "OtherFactory_pair_0x333",
 		Address:     "0x333",
-		StartBlock:  300,
+		StartBlock:  config.Uint64Ptr(300),
 		FactoryName: "OtherFactory",
 		Events:      []config.EventConfig{{Name: "Trade"}},
 	}
