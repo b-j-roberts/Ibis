@@ -1134,6 +1134,182 @@ func TestFeltSizeStruct(t *testing.T) {
 	}
 }
 
+// --- Tuple decoding tests ---
+
+func TestDecodeFunctionOutputs_ArrayOfTupleU256(t *testing.T) {
+	// Reproduces the bug: Array<(u256, u256)> view return type.
+	// Type: core::array::Array::<(core::integer::u256, core::integer::u256)>
+	// Raw felts from RPC: [array_len=1, price_low, price_high, volume_low, volume_high]
+
+	// Build the type through the parser to test full resolution.
+	abiJSON := `[
+		{
+			"type": "interface",
+			"name": "IOrderBook",
+			"items": [
+				{
+					"type": "function",
+					"name": "get_depth",
+					"inputs": [{"name": "max_levels", "type": "core::integer::u32"}],
+					"outputs": [{"name": "depth", "type": "core::array::Array::<(core::integer::u256, core::integer::u256)>"}],
+					"state_mutability": "view"
+				}
+			]
+		}
+	]`
+	parsed, err := Parse([]byte(abiJSON))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	fn := parsed.Functions["get_depth"]
+	if fn == nil {
+		t.Fatal("get_depth function not found")
+	}
+
+	// Simulate RPC return: 1 tuple element with price=7340000000, volume=99787251
+	felts := []*felt.Felt{
+		feltFromUint64(1),          // array length
+		feltFromHex("0x1b57f8300"), // price low
+		feltFromUint64(0),          // price high
+		feltFromHex("0x5f2a1f3"),   // volume low
+		feltFromUint64(0),          // volume high
+	}
+
+	result, err := DecodeFunctionOutputs(fn.Outputs, felts)
+	if err != nil {
+		t.Fatalf("DecodeFunctionOutputs failed: %v", err)
+	}
+
+	depth, ok := result["depth"].([]any)
+	if !ok {
+		t.Fatalf("depth is not []any, got %T: %v", result["depth"], result["depth"])
+	}
+	if len(depth) != 1 {
+		t.Fatalf("depth length = %d, want 1", len(depth))
+	}
+
+	tuple, ok := depth[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tuple is not map[string]any, got %T: %v", depth[0], depth[0])
+	}
+
+	// u256: (0x1b57f8300 low, 0 high) = 7340000000
+	if tuple["0"] != "7340000000" {
+		t.Errorf("tuple[0] = %v, want 7340000000", tuple["0"])
+	}
+	// u256: (0x5f2a1f3 low, 0 high) = 99787251
+	if tuple["1"] != "99787251" {
+		t.Errorf("tuple[1] = %v, want 99787251", tuple["1"])
+	}
+}
+
+func TestDecodeFunctionOutputs_ArrayOfTupleMultipleElements(t *testing.T) {
+	// Test with multiple tuple elements in the array.
+	tupleType := &TypeDef{
+		Kind: CairoTuple,
+		Name: "(core::integer::u256, core::integer::u256)",
+		Members: []FieldDef{
+			{Name: "0", Type: &TypeDef{Kind: CairoU256, Name: "core::integer::u256"}},
+			{Name: "1", Type: &TypeDef{Kind: CairoU256, Name: "core::integer::u256"}},
+		},
+	}
+	outputs := []FieldDef{
+		{Name: "positions", Type: &TypeDef{Kind: CairoArray, Name: "array", Inner: tupleType}},
+	}
+
+	felts := []*felt.Felt{
+		feltFromUint64(2),   // array length = 2
+		feltFromUint64(100), // pos[0].first low
+		feltFromUint64(0),   // pos[0].first high
+		feltFromUint64(200), // pos[0].second low
+		feltFromUint64(0),   // pos[0].second high
+		feltFromUint64(300), // pos[1].first low
+		feltFromUint64(0),   // pos[1].first high
+		feltFromUint64(400), // pos[1].second low
+		feltFromUint64(0),   // pos[1].second high
+	}
+
+	result, err := DecodeFunctionOutputs(outputs, felts)
+	if err != nil {
+		t.Fatalf("DecodeFunctionOutputs failed: %v", err)
+	}
+
+	positions := result["positions"].([]any)
+	if len(positions) != 2 {
+		t.Fatalf("positions length = %d, want 2", len(positions))
+	}
+
+	pos0 := positions[0].(map[string]any)
+	if pos0["0"] != "100" {
+		t.Errorf("pos[0][0] = %v, want 100", pos0["0"])
+	}
+	if pos0["1"] != "200" {
+		t.Errorf("pos[0][1] = %v, want 200", pos0["1"])
+	}
+
+	pos1 := positions[1].(map[string]any)
+	if pos1["0"] != "300" {
+		t.Errorf("pos[1][0] = %v, want 300", pos1["0"])
+	}
+	if pos1["1"] != "400" {
+		t.Errorf("pos[1][1] = %v, want 400", pos1["1"])
+	}
+}
+
+func TestResolveTupleType(t *testing.T) {
+	// Test that tuple types are correctly resolved via the parser.
+	abiJSON := `[
+		{
+			"type": "interface",
+			"name": "ITest",
+			"items": [
+				{
+					"type": "function",
+					"name": "get_pair",
+					"inputs": [],
+					"outputs": [{"name": "pair", "type": "(core::felt252, core::integer::u64)"}],
+					"state_mutability": "view"
+				}
+			]
+		}
+	]`
+	parsed, err := Parse([]byte(abiJSON))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	fn := parsed.Functions["get_pair"]
+	if fn == nil {
+		t.Fatal("get_pair not found")
+	}
+
+	td := fn.Outputs[0].Type
+	if td.Kind != CairoTuple {
+		t.Fatalf("expected CairoTuple, got %d", td.Kind)
+	}
+	if len(td.Members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(td.Members))
+	}
+	if td.Members[0].Type.Kind != CairoFelt252 {
+		t.Errorf("member 0 kind = %d, want CairoFelt252", td.Members[0].Type.Kind)
+	}
+	if td.Members[1].Type.Kind != CairoU64 {
+		t.Errorf("member 1 kind = %d, want CairoU64", td.Members[1].Type.Kind)
+	}
+}
+
+func TestFeltSizeTuple(t *testing.T) {
+	td := &TypeDef{
+		Kind: CairoTuple,
+		Members: []FieldDef{
+			{Name: "0", Type: &TypeDef{Kind: CairoU256}},
+			{Name: "1", Type: &TypeDef{Kind: CairoU256}},
+		},
+	}
+	if td.FeltSize() != 4 {
+		t.Errorf("(u256, u256) FeltSize = %d, want 4", td.FeltSize())
+	}
+}
+
 // --- End-to-end test: parse, register, match, decode ---
 
 func TestEndToEnd(t *testing.T) {

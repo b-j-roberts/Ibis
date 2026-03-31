@@ -183,7 +183,21 @@ func (a *ABI) resolveType(typeName string) *TypeDef {
 	// Strip snapshot prefix.
 	typeName = strings.TrimPrefix(typeName, "@")
 
-	// Check primitives and built-in types first.
+	// Handle Array/Span generics first -- inner types need full resolution
+	// (not just resolvePrimitive) to support structs, enums, and tuples.
+	if inner, ok := extractGenericInner(typeName, "core::array::Array::<"); ok {
+		return &TypeDef{Kind: CairoArray, Name: typeName, Inner: a.resolveType(inner)}
+	}
+	if inner, ok := extractGenericInner(typeName, "core::array::Span::<"); ok {
+		return &TypeDef{Kind: CairoSpan, Name: typeName, Inner: a.resolveType(inner)}
+	}
+
+	// Handle tuples: (T1, T2, ...) but not unit type ().
+	if len(typeName) > 2 && typeName[0] == '(' && typeName[len(typeName)-1] == ')' {
+		return a.resolveTuple(typeName)
+	}
+
+	// Check primitives and built-in types.
 	// This ensures well-known types like u256 and bool are decoded as
 	// primitives even when they appear as struct/enum in the ABI.
 	if isKnownPrimitive(typeName) {
@@ -197,6 +211,49 @@ func (a *ABI) resolveType(typeName string) *TypeDef {
 
 	// Unknown type -- treat as felt252.
 	return resolvePrimitive(typeName)
+}
+
+// resolveTuple parses a tuple type string like "(T1, T2, ...)" into a CairoTuple TypeDef.
+func (a *ABI) resolveTuple(typeName string) *TypeDef {
+	inner := typeName[1 : len(typeName)-1]
+	parts := splitTupleMembers(inner)
+
+	td := &TypeDef{
+		Kind: CairoTuple,
+		Name: typeName,
+	}
+	for i, part := range parts {
+		resolved := a.resolveType(strings.TrimSpace(part))
+		td.Members = append(td.Members, FieldDef{
+			Name: fmt.Sprintf("%d", i),
+			Type: resolved,
+		})
+	}
+	return td
+}
+
+// splitTupleMembers splits a tuple's inner type string on commas,
+// respecting nested generics and parentheses.
+// e.g., "core::integer::u256, core::integer::u256" -> ["core::integer::u256", "core::integer::u256"]
+func splitTupleMembers(s string) []string {
+	var parts []string
+	depth := 0
+	start := 0
+	for i, c := range s {
+		switch c {
+		case '(', '<':
+			depth++
+		case ')', '>':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
 }
 
 // knownPrimitives is the set of Cairo types that should always be decoded

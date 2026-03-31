@@ -89,6 +89,8 @@ func decodeType(td *TypeDef, felts []*felt.Felt, offset int) (val any, consumed 
 		return decodeByteArray(felts, offset)
 	case CairoArray, CairoSpan:
 		return decodeArray(td, felts, offset)
+	case CairoTuple:
+		return decodeTuple(td, felts, offset)
 	case CairoStruct:
 		return decodeStruct(td, felts, offset)
 	case CairoEnum:
@@ -256,6 +258,24 @@ func decodeArray(td *TypeDef, felts []*felt.Felt, offset int) (result []any, con
 			return nil, 0, fmt.Errorf("decoding array element %d: %w", i, err)
 		}
 		result = append(result, val)
+		consumed += n
+	}
+
+	return result, consumed, nil
+}
+
+// decodeTuple decodes a tuple by decoding each member in order.
+// Members are keyed by their positional index ("0", "1", ...).
+func decodeTuple(td *TypeDef, felts []*felt.Felt, offset int) (result map[string]any, consumed int, err error) {
+	result = make(map[string]any, len(td.Members))
+	consumed = 0
+
+	for _, member := range td.Members {
+		val, n, err := decodeType(member.Type, felts, offset+consumed)
+		if err != nil {
+			return nil, 0, fmt.Errorf("decoding tuple member %q: %w", member.Name, err)
+		}
+		result[member.Name] = val
 		consumed += n
 	}
 

@@ -220,7 +220,7 @@ func CairoTypeToColumnType(td *abi.TypeDef) string {
 		return "string"
 	case abi.CairoArray, abi.CairoSpan:
 		return "string" // JSON-encoded.
-	case abi.CairoStruct:
+	case abi.CairoStruct, abi.CairoTuple:
 		return "string" // JSON-encoded.
 	case abi.CairoEnum:
 		return "string" // JSON-encoded.

@@ -30,7 +30,8 @@ const (
 	CairoSpan
 	CairoStruct
 	CairoEnum
-	CairoUnit // ()
+	CairoTuple // (T1, T2, ...)
+	CairoUnit  // ()
 )
 
 // TypeDef represents a resolved Cairo type definition.
@@ -57,6 +58,16 @@ func (t *TypeDef) FeltSize() int {
 		size := 0
 		for _, m := range t.Members {
 			size += m.Type.FeltSize()
+		}
+		return size
+	case CairoTuple:
+		size := 0
+		for _, m := range t.Members {
+			ms := m.Type.FeltSize()
+			if ms < 0 {
+				return -1
+			}
+			size += ms
 		}
 		return size
 	case CairoEnum:
