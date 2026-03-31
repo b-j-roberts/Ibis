@@ -226,8 +226,12 @@ func (vp *ViewPoller) reorgChan() <-chan struct{} {
 
 // runView is the per-function polling loop.
 func (vp *ViewPoller) runView(ctx context.Context, entry *viewEntry) {
-	// Add startup jitter: random 0-10s to spread RPC load across view functions.
-	jitter := time.Duration(rand.Int63n(int64(10 * time.Second)))
+	// Add startup jitter: up to min(10s, interval) to spread RPC load.
+	maxJitter := 10 * time.Second
+	if entry.interval < maxJitter {
+		maxJitter = entry.interval
+	}
+	jitter := time.Duration(rand.Int63n(int64(maxJitter)))
 	select {
 	case <-ctx.Done():
 		return

@@ -353,9 +353,9 @@ func TestViewPoller_ReorgTriggerRePoll(t *testing.T) {
 	cs := testContractStateWithViews(addr, "MyToken", map[string]*abi.FunctionDef{
 		"total_supply": funcDef,
 	})
-	// Use 2s interval so the ticker won't fire during the test,
+	// Use 1s interval so the ticker won't fire during the test window,
 	// only the reorg notification triggers the second poll.
-	cs.config.Views[0].Interval = "2s"
+	cs.config.Views[0].Interval = "1s"
 
 	returnValue := new(felt.Felt).SetUint64(42)
 	mp := &mockProvider{
@@ -380,8 +380,8 @@ func TestViewPoller_ReorgTriggerRePoll(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for initial poll (jitter is up to 10% of 2s = 200ms, so wait 500ms).
-	time.Sleep(500 * time.Millisecond)
+	// Wait for initial poll (jitter is up to interval = 1s).
+	time.Sleep(1200 * time.Millisecond)
 	initialCalls := mp.callCount.Load()
 	if initialCalls < 1 {
 		t.Fatalf("expected at least 1 initial call, got %d", initialCalls)
