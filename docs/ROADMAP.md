@@ -225,235 +225,363 @@
 - Preset registry is a simple `map[string]PresetDefinition` in Go code — no external files or plugin system needed. Future presets (AMM, governance) can be added by extending this map.
 - Config YAML shape: `contracts: [{ name: STRK, address: "0x...", preset: erc20 }]` — that's all a user needs for a fully functional ERC20 indexer with transfer analytics.
 
-### 3.19 View Function Config, Provider & ABI Decoding
+### 3.20 Ibis-Config Skill Revamp/Refactor
 
-**Description**: Add the foundational infrastructure for view function indexing: config parsing, validation, `starknet_call` support in the provider, and ABI-based decoding of function return values. This task builds all the pieces that the poller (3.20) consumes, without changing the indexing engine's runtime behavior. View function indexing allows users to poll contract read functions at configurable intervals and store results as regular ibis tables with auto-generated REST APIs — capturing on-chain state that is not derivable from events alone (e.g., oracle prices, total supply, governance parameters).
-
-**Requirements**:
-- [ ] Add `ViewConfig` struct to `internal/config/config.go` with fields: `Function` (string, required — the Cairo function name), `Calldata` ([]string, optional — hex felt arguments), `Interval` (string, required — Go duration like `"30s"`, `"5m"`), `Table` (TableConfig, required — reuses existing table config with `type: unique` or `type: log`)
-- [ ] Add `Views []ViewConfig` field to `ContractConfig` (`yaml:"views,omitempty" json:"views,omitempty"`)
-- [ ] Config validation in `internal/config/validate.go`: reject empty `function` names, validate `interval` parses as `time.Duration` (minimum 1s), validate `calldata` entries are valid hex felt strings, validate table type is `log` or `unique` only (aggregation not supported for views), require `unique_key` when table type is `unique`
-- [ ] Add `Call(ctx context.Context, contractAddress *felt.Felt, entryPointSelector *felt.Felt, calldata []*felt.Felt, blockID rpc.BlockID) ([]*felt.Felt, error)` method to `StarknetProvider` in `internal/provider/provider.go`, wrapping the underlying `starknet.go` `provider.Call()` RPC method
-- [ ] Add `FunctionDef` struct to `internal/abi/types.go` with fields: `Name` (string), `Selector` (*felt.Felt — computed via `sn_keccak`), `Inputs` ([]Member), `Outputs` ([]Member), `StateMutability` (string — must be `"view"`)
-- [ ] Extend ABI parser (`internal/abi/parser.go`) to extract `FunctionDef` entries from ABI JSON for functions with `state_mutability: "view"`. Store in a `Functions` map on the `ABI` struct keyed by function name
-- [ ] Add `DecodeFunctionOutputs(outputs []Member, felts []*felt.Felt) (map[string]any, error)` to `internal/abi/decoder.go` — decodes the flat `[]*felt.Felt` return value into a typed `map[string]any` using the same offset-tracking pattern as `DecodeEvent`. Output member names become map keys
-- [ ] Add `EncodeFunctionCalldata(inputs []Member, args []string) ([]*felt.Felt, error)` to a new `internal/abi/encoder.go` — converts hex string calldata from config into `[]*felt.Felt` for the RPC call. For the static-calldata-only scope, this is a simple hex-to-felt conversion per argument
-- [ ] Unit tests: `ViewConfig` validation (valid/invalid intervals, missing fields, bad calldata), `DecodeFunctionOutputs` with various return types (single felt, u256, struct, array), `EncodeFunctionCalldata` with hex strings, provider `Call` with mock RPC
-
-**Implementation Notes**:
-- The `FunctionDef` extraction reuses the existing ABI parser's 3-pass architecture. In pass 3 (where events are extracted), also extract function entries where `Type == "function"` and `StateMutability == "view"`. Non-view functions (external/constructor) are ignored.
-- `DecodeFunctionOutputs` is structurally identical to `DecodeEventData` — both walk a `[]Member` definition and consume felts from an offset. The difference is that function outputs use the `outputs` field from the ABI instead of `data` members. Consider extracting a shared `decodeMembers(members []Member, felts []*felt.Felt, offset *int)` helper to avoid duplication.
-- The provider `Call` method uses `rpc.BlockID{Tag: "latest"}` as the default block parameter. The poller (3.20) will pass this in.
-- `starknet.go`'s `rpc.Provider` already has a `Call(ctx, FunctionCall, BlockID)` method — ibis just needs to expose it through `StarknetProvider`. The `FunctionCall` struct takes `ContractAddress`, `EntryPointSelector`, and `Calldata` as `*felt.Felt` values.
-- Entry point selectors for functions use the same `sn_keccak(function_name)` as event selectors — reuse `ComputeSelector` from `internal/abi/selector.go`.
-- Config YAML shape for views:
-  ```yaml
-  contracts:
-    - name: PriceOracle
-      address: "0x049d36570d4e46..."
-      abi: fetch
-      events:
-        - name: PriceUpdated
-          table:
-            type: log
-      views:
-        - function: get_price
-          calldata: ["0x4554480000000000000000000000000000000000000000000000000000000000"]
-          interval: 30s
-          table:
-            type: unique
-            unique_key: _view_key
-        - function: total_supply
-          interval: 5m
-          table:
-            type: log
-  ```
-- For `unique` view tables, the `unique_key` field identifies which output column to use as the deduplication key. A special convention `_view_key` can be used to mean "single-row, always overwrite" (the poller generates a constant key value).
-
-### 3.20 View Function Poller & Engine Integration
-
-**Description**: Build the polling engine that periodically calls view functions via `starknet_call`, decodes results using the ABI infrastructure from 3.19, stores them as regular table operations, and integrates with ibis's existing engine lifecycle (startup, shutdown, reorg handling). View function tables are registered with the same schema system as event tables, so they automatically get REST API endpoints, SSE streaming, and query support with zero additional API code.
+**Description**: The ibis-config Claude skill (`~/.claude/skills/ibis-config/`) generates `ibis.config.yaml` files from contract addresses and ABIs. Since it was originally written, the indexer has gained views, discover (class hash watching), UDC configuration, admin API settings, CORS, factory shared tables, per-contract start_block, and CairoTuple support. The skill's SKILL.md workflow, config-schema.md reference, and parse_events.py script are all missing ~50% of the current config surface area. This task is a ground-up revamp to bring the skill in sync with the actual codebase.
 
 **Requirements**:
-- [ ] Create `internal/engine/poller.go` with a `ViewPoller` struct that manages periodic `starknet_call` polling for all configured view functions across all contracts
-- [ ] `ViewPoller.Setup(contracts, provider, store)` — for each contract's `ViewConfig` entries: resolve the `FunctionDef` from the parsed ABI, compute the entry point selector, parse calldata from config hex strings, parse the polling interval, and build the `TableSchema` for the view's results
-- [ ] `ViewPoller.Run(ctx)` — spawn one goroutine per view function, each running a `time.Ticker` at the configured interval. On each tick: call `provider.Call()` with `BlockID{Tag: "latest"}`, decode the result via `DecodeFunctionOutputs`, build a `store.Operation`, and call `store.ApplyOperations`. Clean shutdown via context cancellation
-- [ ] Add startup jitter (up to 10% of the interval) per view function goroutine to spread RPC load and avoid thundering herd on startup
-- [ ] Schema generation: extend `internal/schema/generator.go` with `BuildViewSchema(contractName string, funcDef *abi.FunctionDef, viewCfg config.ViewConfig) *types.TableSchema` — maps function output members to table columns using the same `CairoTypeToColumnType` as events. Adds metadata columns: `block_number`, `timestamp`, `_view_key` (synthetic poll identifier). Table name follows `{contract}_{function_name}` convention
-- [ ] For `unique` table views: each poll overwrites the previous row (keyed by `unique_key` from config). For `log` table views: each poll appends a new row with the block number at poll time
-- [ ] Integrate `ViewPoller` into `Engine.Run()`: create and start the poller alongside the event subscriber. The poller shares the engine's `store`, `provider`, and `context` but runs independently of event processing
-- [ ] Wire view schemas into `Engine.Setup()` so they are included in `Engine.Schemas()` — this ensures the API server registers them and they appear in `/v1/status`
-- [ ] Reorg handling: when the engine's `handleReorg` fires, signal the `ViewPoller` to immediately re-poll all view functions (re-query current state rather than reverting operation pairs). Use a channel or callback from the engine's reorg handler
-- [ ] Skip-if-busy: if a poll tick fires while the previous RPC call for that function is still in flight, skip the tick and log a debug message. Use a non-blocking channel send or `sync.Mutex` per function
-- [ ] Error resilience: transient RPC failures (connection reset, timeout, 429) do not terminate the polling goroutine. Log at warn level, increment an error counter, and continue on the next tick. After 10 consecutive failures, log at error level
-- [ ] Record `block_number` from a `provider.BlockNumber()` call alongside each poll result, so the stored data is anchored to a specific chain height
-- [ ] Add view function status to the `/v1/status` endpoint: for each view function, report `function_name`, `contract`, `interval`, `last_poll_block`, `last_poll_time`, `consecutive_errors`
-- [ ] Unit tests: `ViewPoller` lifecycle (setup, run, shutdown), schema generation for view functions, mock RPC returning known felts and verifying decoded + stored values, skip-if-busy behavior, reorg re-poll trigger
+- [ ] Rewrite `references/config-schema.md` to cover the full current config surface: `discover[]` with `class_hash`, `group`, `shared_tables`, `name_template`; `views[]` with `function`, `calldata`, `interval`, `table` (log/unique only); `api.cors_origins` and `api.admin_key`; `indexer.udc_address` and `indexer.udc_event` (version, address_key/data, class_hash_key/data); per-contract `start_block`; factory `shared_tables` and `child_name_template`; CairoTuple type mapping
+- [ ] Update `SKILL.md` workflow to add a new step for **view function detection**: after event analysis, present discovered view functions and recommend polling intervals, let user confirm which views to include
+- [ ] Update `SKILL.md` workflow to add a new step for **discover config generation**: guided flow for class hash watching — input class hash, choose group name, ABI source, shared_tables recommendation, name_template, and event/view templates
+- [ ] Update `parse_events.py` to extract view function candidates from the ABI: look for `"type": "function"` entries with `"state_mutability": "view"`, identify return types, recommend interval (30s default, 5s for price-like functions, 5m for slow-changing state), output in a `"views"` section alongside `"events"`
+- [ ] Update `parse_events.py` to recognize CairoTuple types (`(T1, T2, ...)`) and map them to `"string (JSON)"` in the type mapping
+- [ ] Update `SKILL.md` Step 4 (Generate Config) to include `api.admin_key`, `api.cors_origins`, `indexer.udc_address` (with comment for devnet/appchain override), and per-contract `start_block` in the generated output template
+- [ ] Update `SKILL.md` Step 5 (Factory Detection) to recommend `shared_tables: true` by default for factories (was already conditional on 10+ children — make it the default recommendation) and include `child_name_template` guidance using factory event field names
+- [ ] Add new `SKILL.md` Step 6 for **discover config generation**: detect when user provides a class hash instead of a contract address, guide through group naming, ABI source, shared_tables (recommend true when multiple instances expected), and name_template with available placeholders (`{class_hash_short}`, `{address_short}`, `{group}`)
+- [ ] Update the config-schema.md validation rules section with new rules: discover class_hash uniqueness, discover shared_tables requires named ABI, view interval minimum 1s, view table type restricted to log/unique, UDC event mutual exclusivity rules, group name format (lowercase alphanumeric + hyphens)
+- [ ] Verify `fetch_abi.sh` still works correctly against current Nethermind free RPC endpoints for both mainnet and sepolia, fix if needed
+- [ ] Add example YAML snippets to `config-schema.md` for: a views-only config (polling a token's `total_supply`), a discover config (watching a class hash with shared tables), and a full factory + views combo config
 
 **Implementation Notes**:
-- The `ViewPoller` follows the same lifecycle pattern as `provider.EventSubscriber`: created during setup, started as a goroutine in `Run()`, stopped via context cancellation. It does NOT share the `e.events` channel — view results go directly to `store.ApplyOperations`.
-- For `unique` view tables, the operation is always `OpUpdate` (or `OpInsert` on first poll). The `Key` is the `unique_key` value from the decoded output. For the common single-value case (e.g., `total_supply`), use `_view_key: "latest"` as a constant key so there's always exactly one row.
-- For `log` view tables, the operation is always `OpInsert` with key `"{block_number}:{poll_index}"` following the same pattern as event log tables.
-- Reorg re-poll strategy: the engine passes a `reorgChan chan struct{}` to the `ViewPoller`. When a reorg notification arrives, the engine sends on this channel. Each view goroutine selects on both its ticker and the reorg channel; on reorg signal, it immediately re-polls regardless of the interval.
-- Duration parsing: use `time.ParseDuration(viewCfg.Interval)` during `ViewPoller.Setup()`. The config validation (3.19) already guarantees this parses successfully.
-- The `/v1/status` endpoint already reports per-contract info via `engine.Contracts()`. Extend this to include view function metadata by adding a `Views []ViewStatus` field to `ContractInfo` or a separate `ViewFunctions` section in the status response.
-- View tables participate in the existing API routing automatically: `GET /v1/PriceOracle/get_price` returns the latest polled value (for unique tables) or historical poll snapshots (for log tables). No new API handler code is needed — the parametric `{contract}/{event}` routes already match.
-- For factory contracts with views, each child contract can inherit view configs from the factory template. The poller spawns per-child goroutines. With `shared_tables: true`, all children's poll results go to the same table with a `contract_address` discriminator column.
-- Consider adding a `GET /v1/{contract}/{function}/poll` endpoint later (not in this task) that triggers an immediate on-demand poll — useful for debugging and testing.
+- View functions in Cairo ABIs have `"type": "function"` and `"state_mutability": "view"`. The parse_events.py script should filter for these and extract input parameters (for calldata) and output types (for table schema). Functions with no inputs or simple felt inputs are the best candidates.
+- For discover config generation, the skill should ask whether the user knows specific deployed instances — if so, suggest using `contracts[]` instead. Discover is for cases where new contracts of a known class will be deployed in the future (e.g., all instances of a custom token).
+- The `_view_key` synthetic column is used for unique view tables — when `unique_key: "_view_key"`, the table stores only the latest polled value (single-row mode). This is the recommended default for simple getter views like `total_supply` or `get_price`.
+- UDC event format is an advanced config that most users won't need — the skill should only surface it when the user mentions devnet, appchains, Katana, or custom UDC. Default auto-detection handles mainnet/sepolia correctly.
+- The existing bash+python script approach is retained. `fetch_abi.sh` handles ABI fetching, `parse_events.py` handles parsing. The Python script gains a new `"views"` output section alongside the existing `"events"` section.
+- Config-schema.md should be the single source of truth for all YAML fields, types, defaults, and validation rules — treat it as the authoritative reference that SKILL.md points to.
+- Skip the `forward` table type (roadmap 3.16) — it's not implemented yet. Add it in a future skill update when the feature ships.
 
-### 3.21 Configurable UDC Address for Discover Mode
+### 3.21 Ibis-Query Skill Revamp/Refactor
 
-**Description**: The discover feature hardcodes the UDC (Universal Deployer Contract) address to `0x04a64cd09...`, which works on mainnet and Sepolia but fails silently on `starknet-devnet-rs` and custom appchains where the UDC lives at a different address. This makes class-hash-based contract discovery unusable for local development and testing. Adding a configurable `udc_address` field unblocks devnet users and anyone running Starknet appchains with non-standard UDC deployments.
+**Description**: The ibis-query Claude skill (`~/.claude/skills/ibis-query/`) translates natural language questions about indexed Starknet data into queries. Since it was written, the indexer has gained view functions, discovery mode, admin API, shared tables beyond factories, SSE streaming, CairoTuple support, and the status endpoint now returns richer data (factory summaries, view statuses, per-contract cursors). The skill's SKILL.md workflow is CLI-first but should be REST API-first. The reference doc has incorrect response formats (aggregate says `{"values": ...}` but actual is `{"data": ...}`), is missing ~40% of current endpoints, and has no coverage of view function queries or discovery queries. This task is a ground-up revamp to bring the skill in sync with the current codebase and shift to a REST API-first approach.
 
 **Requirements**:
-- [ ] Add optional `UDCAddress` field (`yaml:"udc_address,omitempty"`) to `IndexerConfig` in `internal/config/config.go`
-- [ ] In `applyDefaults()`, set `UDCAddress` to the current hardcoded constant (`0x04a64cd09a853868621d94cae9952b106f2c36a3f81260f85de6696c6b050221`) when the field is empty
-- [ ] Config validation: if `udc_address` is provided, validate it as a hex hash via the existing `validateHexHash` helper
-- [ ] Update `setupDiscovery()` in `internal/engine/discover.go` to read `e.cfg.Indexer.UDCAddress` instead of the `UDCAddress` constant
-- [ ] Keep the `UDCAddress` constant as the exported default for programmatic use, but the engine must prefer the config value
-- [ ] Add `udc_address` to the example discover config in `configs/` so users can see the option
-- [ ] Unit tests: verify custom UDC address flows through config loading, validation, and into `discoveryState.udcAddress`; verify default is applied when omitted; verify invalid hex is rejected
+- [ ] Rewrite `SKILL.md` to use a REST API-first approach: prefer `curl` commands against the running ibis API server. Fall back to `ibis query` CLI only when explicitly requested or when the API server is not running. Include guidance for constructing base URL from config (`http://{host}:{port}/v1`)
+- [ ] Rewrite `SKILL.md` Step 1 (Discover Available Data) to use `GET /v1/status` as the primary discovery method — it returns all contracts, cursors, factory summaries, and view statuses. Keep `ibis query --list` and config-file reading as fallbacks
+- [ ] Add view function query coverage to `SKILL.md`: new mapping rules for questions like "what's the current price?", "total supply?", "contract state?" → view tables. Document that view tables have different metadata columns (`block_number`, `timestamp`, `contract_address`, `_view_key`) and lack `transaction_hash`, `log_index`, `event_name`, `status`
+- [ ] Add discovery query coverage to `SKILL.md`: map questions like "what contracts were discovered?", "how many instances of class X?" → `GET /v1/discover/{classHash}/contracts` endpoint
+- [ ] Update the NL-to-query mapping table in `SKILL.md` to include view-related intents ("current value of...", "latest state of..."), discovery intents, and SSE streaming intents ("stream events", "watch for new...", "live tail")
+- [ ] Update filter/ordering mapping to cover view table fields — view tables support `block_number`, `timestamp`, `contract_address`, and `_view_key` as filterable/orderable columns, plus decoded view output fields
+- [ ] Rewrite `references/query_reference.md` as a single comprehensive reference covering all current REST API endpoints: event CRUD (`/v1/{contract}/{event}`, `/latest`, `/count`, `/unique`, `/aggregate`, `/stream`), factory (`/v1/{factory}/children`, `/children/count`), discovery (`/v1/discover/{classHash}/contracts`), system (`/v1/health`, `/v1/status`), with correct response formats for each
+- [ ] Fix the aggregate response format in the reference doc: actual format is `{"data": {"column": value, ...}}`, not `{"values": {...}}`
+- [ ] Add view function table documentation to the reference: how view tables are named (`{contract}_{function}`), their metadata columns, how `_view_key` works for unique vs log view tables, and example queries
+- [ ] Update the Cairo type-to-column mapping table to include `CairoTuple → string (JSON)` alongside the existing types
+- [ ] Update the config structure reference section to reflect the current `Config` struct: add `discover[]`, `views[]` on contracts, `api.cors_origins`, `api.admin_key`, `indexer.udc_address`, `indexer.udc_event`, per-contract `start_block`, factory `shared_tables`, `child_name_template`, and `contract.dynamic`/`contract.shared_tables`/`contract.discover_class_hash` fields
+- [ ] Update `scripts/inspect_config.sh` to extract view functions and discovery configs from `ibis.config.yaml` in addition to contracts and events. Output should clearly separate: contracts (with events), view functions (with intervals), discovery configs (with class hashes), and factory configs
+- [ ] Add SSE streaming section to the reference: endpoint format, `Last-Event-ID` header for replay, event format (`id: {block}:{logIndex}\ndata: {json}\n\n`), and example `curl` command for streaming
+- [ ] Add shared table documentation: explain that factory children, discovered contracts, and admin-registered contracts can all use shared tables, and that shared tables add a `contract_name` column for disambiguation. Show filtering by child: `?contract_address=eq.0x...`
+- [ ] Add example query mappings for common patterns: "show me recent transfers" → `curl .../v1/Token/Transfer?limit=10&order=block_number.desc`, "what's the total volume?" → `curl .../v1/DEX/VolumeUpdate/aggregate`, "current token price?" → `curl .../v1/Oracle/get_price?_view_key=eq.latest`, "list factory children" → `curl .../v1/DEXFactory/children`
 
 **Implementation Notes**:
-- The change is minimal: one new field on `IndexerConfig`, a default in `applyDefaults()`, a validation check, and a one-line change in `setupDiscovery()` to use `e.cfg.Indexer.UDCAddress` instead of the constant. The existing `discoveryState.udcAddress` field already holds a `*felt.Felt` parsed at setup time — just change what string it parses from.
-- Place `udc_address` under `indexer:` (not under `discover:`) because a single ibis instance uses one UDC address for all class-hash discoveries. Multiple UDC addresses per discover entry is not a real-world need — devnets and appchains each have exactly one UDC.
-- The `starknet-devnet-rs` UDC address (`0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf`) emits the same `ContractDeployed` event with the same key/data layout, so no decoder changes are needed.
-- Existing tests in `discover_test.go` that reference `UDCAddress` directly should continue to work since the default fills in the same value. New tests should verify that a custom address propagates correctly.
-- Config YAML shape:
-  ```yaml
-  indexer:
-    start_block: 0
-    udc_address: "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf"
+- The REST API-first shift means the skill's primary output is `curl` commands, not `ibis query` commands. This is more universal — works in any environment where the API server is reachable, doesn't require the ibis binary installed locally, and maps more directly to what developers use in scripts and integrations.
+- The `GET /v1/status` endpoint is the best single source of truth for discovery. It returns: `current_block`, `contracts[]` (name, address, events count, cursor), `factories{}` (child_count, synced, backfilling), and `views{}`. The skill should call this first to understand what data is available before constructing queries.
+- View tables follow the naming convention `{contract}_{function}` (e.g., `mytoken_total_supply`). The `_view_key` column is a synthetic key — for unique view tables, it deduplicates to keep only the latest polled value. For log view tables, every poll result is appended.
+- Discovery endpoints serve a different purpose than event queries — they return contract metadata (addresses, deployment info) rather than indexed event data. The skill should recognize when a user is asking about discovered contracts vs asking about data from those contracts.
+- The reference doc should be structured with clear sections: System Endpoints, Event Endpoints, View Endpoints, Factory Endpoints, Discovery Endpoints, SSE Streaming, Query Parameters, Response Formats, Config Reference, Type Mappings. This makes it easy for the SKILL.md prompt to point to specific sections.
+- The `inspect_config.sh` script should output structured sections like `=== Contracts ===`, `=== View Functions ===`, `=== Discovery ===`, `=== Factories ===` for easy parsing by the skill. Consider adding a `--json` flag that outputs machine-readable JSON for programmatic use.
+- Skip admin API endpoints (register/deregister/update contracts) — the skill is focused on data queries, not operational management. Admin operations are covered by the ibis-admin skill (3.21b).
+- Skip the `forward` table type (roadmap 3.16) and `--watch` CLI mode (roadmap 3.17) — neither is implemented yet. Add coverage in future skill updates when those features ship.
 
-  discover:
-    - class_hash: "0x47a9dc..."
-      abi: fetch
-      events:
-        - name: "*"
-          table:
-            type: log
-  ```
+### 3.21b Create Ibis-Admin Skill
 
-### 3.22 UDC Event Format Detection & Override
-
-**Description**: The discover code in `handleDiscoveryEvent` hardcodes the v1 (modern Cairo) UDC event layout where `keys[1]` = deployed address and `data[0]` = class hash. The older Cairo 0 UDC puts all fields in the data array (`data[0]` = address, `data[3]` = classHash), with only the event selector in keys. Anyone running ibis against a chain with the older UDC — including early devnet versions and certain appchains — hits silent mismatches. This task adds three layers of UDC format handling: auto-detection from the event shape, a named version enum for the two known layouts, and fine-grained index overrides for truly custom UDC variants.
+**Description**: Create a new Claude skill (`~/.claude/skills/ibis-admin/`) that handles contract management and operational monitoring via the ibis HTTP admin API. This is the counterpart to the ibis-query skill (3.21) — ibis-query handles data queries, ibis-admin handles contract lifecycle management. The skill translates natural language requests like "register this ERC20 at 0x123 with Transfer events" into fully-formed `curl` commands against the admin API endpoints (`POST/DELETE/GET/PUT /v1/admin/contracts`), constructs complex JSON registration payloads from conversational input, and provides health/status monitoring. It does NOT cover CLI lifecycle commands (`ibis init`, `ibis run`) or data queries — those belong to other skills.
 
 **Requirements**:
-- [ ] Add `UDCEventFormat` struct to `internal/config/config.go` with fields: `Version` (string: `"auto"` | `"v0"` | `"v1"`, default `"auto"`), `AddressKey` / `AddressData` (optional int pointers for key/data index of deployed address), `ClassHashKey` / `ClassHashData` (optional int pointers for key/data index of class hash)
-- [ ] Add `UDCEvent *UDCEventFormat` field to `IndexerConfig` (`yaml:"udc_event,omitempty"`)
-- [ ] Config validation: reject if both `AddressKey` and `AddressData` are set (mutually exclusive — address is in keys OR data, not both); same for `ClassHashKey`/`ClassHashData`; validate index values are non-negative; validate `version` is one of `auto`, `v0`, `v1`; reject fine-grained overrides when `version` is `v0` or `v1` (overrides only apply with `version: auto` or when version is omitted)
-- [ ] Implement auto-detection in `handleDiscoveryEvent`: if `len(keys) >= 4`, use v1 layout (keys[1] = address, data[0] = classHash); if `len(keys) == 1 && len(data) >= 4`, use v0 layout (data[0] = address, data[3] = classHash); if neither matches, log a warning with the actual key/data lengths and skip the event
-- [ ] When `version` is explicitly `v0` or `v1`, skip auto-detection and use the fixed layout directly
-- [ ] When fine-grained overrides are present (e.g., `address_key: 2`), use the specified indices regardless of auto-detection, falling back to the version's defaults for any unspecified field
-- [ ] Add `extractDeployedAddress` and `extractClassHash` helper methods on `discoveryState` (or a `udcEventParser` struct) that encapsulate the format resolution logic, keeping `handleDiscoveryEvent` clean
-- [ ] Bounds-check all index accesses against actual `len(keys)` and `len(data)` — return a descriptive error rather than panicking on out-of-range access
-- [ ] Log the detected or configured UDC event format at startup (in `setupDiscovery`) so users can verify which layout ibis is using
-- [ ] Unit tests: auto-detection with v0-shaped events (1 key, 4+ data), auto-detection with v1-shaped events (4+ keys), explicit `version: v0` override, explicit `version: v1` override, fine-grained index overrides, bounds-check failures, malformed events that match neither pattern
+- [ ] Create `~/.claude/skills/ibis-admin/SKILL.md` with skill frontmatter (name: `ibis-admin`, description triggers on "register contract", "add contract to indexer", "remove contract", "indexer status", "is ibis healthy", "list registered contracts", "update contract config")
+- [ ] Define the skill workflow Step 1 (Discover Server): determine the ibis API server URL — read `ibis.config.yaml` for `api.host`/`api.port`, default to `http://localhost:8080`, and check if an admin key is configured (`api.admin_key`). Optionally verify the server is reachable via `GET /v1/health`
+- [ ] Define the skill workflow Step 2 (Understand Intent): classify the user's request into one of: `register` (add new contract), `deregister` (remove contract), `update` (modify existing contract), `list` (show all contracts), `status` (indexer health and progress), `health` (simple health check)
+- [ ] Define the skill workflow Step 3 (Build Request) for `register` intent: translate natural language into a `POST /v1/admin/contracts` JSON body. Support building the full `ContractConfig` payload including `name`, `address`, `abi` (default `"fetch"`), `events[]` (with table type, unique_key, aggregates), `views[]` (with function, interval, table config), `start_block`, and `factory` config. Use conversational context to infer table types (e.g., "track transfers" → log table, "leaderboard" → unique table, "volume tracking" → aggregation table)
+- [ ] Define the skill workflow Step 3 for `deregister` intent: construct `DELETE /v1/admin/contracts/{name}` with optional `?drop_tables=true`. Always confirm with user before including `drop_tables=true` since it's destructive
+- [ ] Define the skill workflow Step 3 for `update` intent: construct `PUT /v1/admin/contracts/{name}` with updated JSON body. Show what will change vs current config
+- [ ] Define the skill workflow Step 3 for `list` intent: construct `GET /v1/admin/contracts` and format the response showing contract name, address, event count, current block, status (active/syncing/backfilling), and whether it's dynamic or a factory child
+- [ ] Define the skill workflow Step 3 for `status`/`health` intents: construct `GET /v1/status` or `GET /v1/health` and present results with context — highlight contracts that are behind, factories with backfilling children, views with consecutive errors
+- [ ] Define the skill workflow Step 4 (Execute and Present): run the `curl` command, parse the response, present results in human-readable format with contextual interpretation (e.g., "Contract registered successfully — it will start indexing from block 850000" or "3 of 12 factory children are still backfilling")
+- [ ] Create `~/.claude/skills/ibis-admin/references/admin_reference.md` with complete admin API reference: all 4 endpoints (`POST`, `DELETE`, `GET`, `PUT` on `/v1/admin/contracts`), plus `GET /v1/health` and `GET /v1/status`, with exact request/response JSON formats, HTTP status codes, error formats (`{"error": "message"}`), and auth header (`X-Admin-Key`)
+- [ ] Include in the reference: full `ContractConfig` JSON schema for registration payloads — all fields with types, defaults, and which are required vs optional. Cover nested structures: `events[].table` (type, unique_key, aggregate[]), `views[]` (function, calldata, interval, table, headers), `factory` (event, child_address_field, child_abi, child_events, shared_tables, child_name_template)
+- [ ] Include NL-to-table-type mapping rules in SKILL.md: "track/log/record" → `log`, "leaderboard/current state/latest per" → `unique`, "total/sum/count/volume" → `aggregation`, "all events/everything" → wildcard `"*"` with `log` type. Include event name inference: "transfers" → `Transfer`, "swaps" → `Swap`, "approvals" → `Approval`
+- [ ] Include guidance for auth handling: if admin key is configured, always include `-H "X-Admin-Key: {key}"` in curl commands. If key is from env var (`${IBIS_ADMIN_KEY}`), use `-H "X-Admin-Key: $IBIS_ADMIN_KEY"`. If no key configured, omit the header
+- [ ] Include error handling guidance: map common HTTP status codes to user-friendly explanations — 401 = "Admin key is wrong or missing", 503 = "Engine not running — is `ibis run` started?", 500 with "already registered" = "Contract already exists — use update instead", 404 = "Contract not found — check `ibis admin list`"
+- [ ] Add example curl commands for common workflows: register a simple ERC20, register a factory contract with shared tables, deregister with table cleanup, update to add new events, check indexer health
 
 **Implementation Notes**:
-- The two known UDC layouts are:
-  - **v1 (modern Cairo)**: `keys[0]=selector, keys[1]=address, keys[2]=deployer, keys[3]=unique` / `data[0]=classHash, data[1..n]=calldata, data[n+1]=salt`
-  - **v0 (Cairo 0)**: `keys[0]=selector` / `data[0]=address, data[1]=deployer, data[2]=unique, data[3]=classHash, data[4]=calldata_len, data[5..]=calldata, data[last]=salt`
-- Auto-detection heuristic is reliable because the two layouts have non-overlapping key counts (1 vs 4+). Edge cases where `len(keys) == 2` or `len(keys) == 3` don't correspond to any known UDC and should trigger the warning path.
-- Config YAML shape:
-  ```yaml
-  indexer:
-    udc_address: "0x041a78e7..."
-    udc_event:
-      version: auto          # auto | v0 | v1 (default: auto)
-      # Fine-grained overrides (optional, for custom UDC variants):
-      # address_key: 1       # index in keys[] for deployed address
-      # class_hash_data: 0   # index in data[] for class hash
-  ```
-- The `discoveryState` struct should store the resolved format (either from config or first auto-detection) so that subsequent events don't re-run the heuristic. However, if `version: auto`, re-detect per event since a chain could theoretically have both UDC versions at different addresses (though `udc_address` makes this unlikely).
-- The `starknet-devnet-rs` UDC uses the v1 layout at a different address (handled by the existing `udc_address` config from 3.21). The v0 layout is found on older `starknet-devnet` (Python) and some early appchains.
-- Existing tests in `discover_test.go` construct events with the v1 layout — they should continue passing unchanged since auto-detect will resolve to v1 for those events. Add new test cases for v0 events alongside them.
+- The skill follows the same structure as ibis-query and ibis-config: `SKILL.md` (main prompt), `references/admin_reference.md` (API reference), and optionally a helper script.
+- The NL-to-payload translation is the key differentiator. When a user says "add the STRK token at 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d with Transfer and Approval events", the skill should generate the complete JSON body with `abi: "fetch"`, two event entries (both `log` type), and appropriate metadata — without requiring the user to manually craft JSON.
+- For complex registrations (factories, views, aggregations), the skill should ask follow-up questions rather than guessing. E.g., "You want to track volume — which field contains the volume amount?" or "Should factory children share tables?"
+- The `drop_tables=true` flag on deregistration is destructive and irreversible. The skill should ALWAYS confirm before including it, and explain that shared tables won't be dropped (other children use them).
+- The status endpoint is the skill's diagnostic tool. When presenting status, highlight actionable insights: contracts stuck at block 0 (never started), large gaps between per-contract cursors (one contract lagging), views with `consecutive_errors > 0` (polling failures).
+- Auth handling should be context-aware: check the config file first for `api.admin_key`. If found, include it automatically. If not found, check if the user has mentioned an admin key or environment variable. If the server returns 401, suggest configuring the admin key.
+- The skill does NOT generate ibis.config.yaml entries — that's the ibis-config skill's job. The admin skill operates against a RUNNING ibis instance via HTTP. If the user wants to add a contract to the config file (for next restart), redirect them to ibis-config.
+- Keep the reference doc focused on the admin API surface. Don't duplicate the data query reference from ibis-query — link to it if needed. The reference should be the single source of truth for request/response formats, status codes, and auth.
+- Error response format is always `{"error": "message"}` with appropriate HTTP status code. The skill should parse this and present the error message clearly.
 
-### 3.23 Shared Tables for Discovered & Admin-Registered Contracts
+### 3.22 Documentation Setup
 
-**Description**: Extend shared table support beyond factory children to class-hash-discovered contracts and admin-registered contracts. Right now `shared_tables` only works for factory children — the `RegisterContract` path passes `nil` for `buildOpts`, and the discover path creates per-instance tables for every discovered contract. But the whole point of class-hash discovery is "these are all the same contract type" — they should naturally share tables. The existing `contract_address` column in log tables already supports per-contract filtering, so shared tables work without schema changes. This task reuses the exact shared-table machinery that factory children already use (`BuildOptions`, `sharedSchemas` caching, composite unique keys) and wires it into the two paths that currently lack it.
+**Description**: Comprehensive user-facing documentation for ibis, living as plain markdown files in the `docs/` folder. The current documentation consists of a README with quick-start coverage, a SPEC.md that is outdated (missing factory support, discovery, views, admin API, shared tables, and many config fields), and a ROADMAP.md. This task creates a full documentation suite following the Diátaxis framework: getting started (tutorial), configuration/CLI/API references, conceptual guides for key features, and a deployment guide. Each subtask (3.22a–3.22j) produces one documentation page. Ibis ships three agent skills (`ibis-config`, `ibis-query`, `ibis-admin`) — each relevant documentation page includes a brief callout showing how the skill can assist with that topic, and 3.22j provides a dedicated skills guide.
 
 **Requirements**:
-- [ ] Add `SharedTables bool` field (`yaml:"shared_tables" json:"shared_tables"`) to `DiscoverConfig` in `internal/config/config.go`
-- [ ] Config validation: when `shared_tables: true` on a discover entry, require `abi` to be a named value (not `"fetch"` or a file path) so there is a clean table prefix — reject with a descriptive error otherwise
-- [ ] In `handleDiscoveryEvent` / discovery registration path (`internal/engine/discover.go`): when `dc.SharedTables` is true, follow the `registerSharedChild` pattern — first discovered contract creates shared tables using `BuildOptions{SharedTable: true, FactoryName: dc.ABI}`, subsequent discoveries reuse cached shared schemas from `discoveryState`
-- [ ] Add a `sharedSchemas map[string][]*types.TableSchema` field to `discoveryState` (keyed by class hash) to cache shared schemas across discoveries of the same class hash
-- [ ] Set `ContractConfig.SharedTables = true` and `ContractConfig.FactoryName = dc.ABI` on discovered child configs when the discover entry has `shared_tables: true`, so schemas rebuild correctly on restart
-- [ ] In `RegisterContract` (`internal/engine/engine.go`): when `cc.SharedTables` is true and `cc.FactoryName` is set, pass `&schema.BuildOptions{SharedTable: true, FactoryName: cc.FactoryName}` instead of `nil` — enabling admin-registered contracts to write to shared tables
-- [ ] For admin registration with shared tables: if shared tables already exist in the store (created by a prior registration with the same `FactoryName`), skip `CreateTable` (use `MigrateTable` or no-op) — same idempotency as factory shared children
-- [ ] Shared table naming follows existing convention: `{abi_name}_{event_name}` (e.g., `optiontoken_writertokendeployed`) — matching how factory shared tables use `{factory_name}_{event_name}`
-- [ ] Unit tests in `discover_test.go`: two contracts discovered with same class hash + `shared_tables: true` produce one set of shared tables; verify `contract_address` column present; verify second discovery reuses cached schemas
-- [ ] Unit tests for `RegisterContract`: verify that `SharedTables: true` + `FactoryName` on ContractConfig produces shared table schemas; verify `nil` buildOpts behavior unchanged when fields are unset
+- [ ] 3.22a: Getting Started Guide
+- [ ] 3.22b: Configuration Reference
+- [ ] 3.22c: REST API Reference
+- [ ] 3.22d: CLI Reference
+- [ ] 3.22e: Table Types Guide
+- [ ] 3.22f: Factory & Discovery Guide
+- [ ] 3.22g: Real-Time Streaming (SSE) Guide
+- [ ] 3.22h: Deployment Guide
+- [ ] 3.22i: Update SPEC.md
+- [ ] 3.22j: Agent Skills Guide
 
-**Implementation Notes**:
-- The discover registration path in `discover.go` currently calls `registerWithABI(ctx, cc, abi)` which always passes `nil` opts. With `shared_tables: true`, switch to the `registerSharedChild` pattern: check `discoveryState.sharedSchemas[classHash]` — if nil, build schemas with `BuildOptions` and create tables; if non-nil, reuse cached schemas and skip table creation.
-- The ABI name (e.g., `OptionToken` from `abi: OptionToken`) serves as the `FactoryName` for `BuildOptions`. This is the table prefix — all discovered instances of that class hash write to `optiontoken_Swap`, `optiontoken_Transfer`, etc. This parallels how factory shared tables use the parent contract's `Name`.
-- For `RegisterContract`, the fix is a 3-line change: check `cc.SharedTables && cc.FactoryName != ""`, and if so, construct `BuildOptions` instead of passing `nil`. The engine's setup phase at `engine.go:534` already handles this pattern for persisted contracts on restart.
-- The `contract_address` column is automatically added by `BuildSchemas` when `SharedTable: true` (see `generator.go:99-102` adding `contract_name`). Log tables also include `contract_address` as a standard metadata column. Both enable per-contract filtering via the existing query system (`?contract_address=eq.0x123`).
-- Deregistration of a discovered shared-table contract should NOT drop the shared tables (same behavior as factory children — see `engine.go:349-359` where `sch.SharedTable` skips `DropTable`). This already works because the `SharedTable` flag on `TableSchema` is set.
-- Config YAML shape for discover:
-  ```yaml
-  discover:
-    - class_hash: "0x47a9dc..."
-      group: uponly
-      abi: OptionToken
-      shared_tables: true    # all discovered instances write to optiontoken_{event}
-      events:
-        - name: "*"
-          table:
-            type: log
-  ```
-- Config YAML shape for admin registration (POST /v1/contracts):
-  ```json
-  {
-    "name": "NewOptionToken",
-    "address": "0x123...",
-    "abi": "fetch",
-    "shared_tables": true,
-    "factory_name": "OptionToken",
-    "events": [{"name": "*", "table": {"type": "log"}}]
-  }
-  ```
+**Implementation Notes**: Plain markdown files in `docs/`, readable directly on GitHub. Use real Starknet contract addresses (ETH, STRK) in tutorial/getting-started content for copy-paste usability; use generic placeholders in reference docs for clarity. Each page should be self-contained with internal cross-links to related pages. Follow progressive disclosure — start with the simplest use case and layer complexity. Each guide that maps to a skill should include a brief "Using the agent skill" callout (1–3 sentences + example prompt) linking to the full Agent Skills Guide (3.22j).
 
-### 3.24 Admin & Discovery View Functions
+---
 
-**Description**: View function polling currently only works for static contracts defined in `ibis.config.yaml`. Two dynamic contract registration paths — class-hash discovery (`discover:` config) and admin registration (`POST /v1/admin/contracts`) — do not wire up view functions, even though the underlying `ViewPoller` machinery is fully functional. This task closes the gap so that discovered and admin-registered contracts can poll view functions with the same semantics as statically configured contracts.
+#### 3.22a Getting Started Guide
+
+**Description**: A step-by-step tutorial that takes a new user from zero to a running ibis indexer with queryable data. This is the primary entry point for new users and should feel effortless. Uses real Starknet contracts (ETH, STRK) so users can follow along with copy-paste commands. Distinct from the README quick start — this is a full walkthrough with explanations.
 
 **Requirements**:
-- [x] Add `Views []ViewConfig` field (`yaml:"views,omitempty" json:"views,omitempty"`) to `DiscoverConfig` in `internal/config/config.go`
-- [x] Copy `dc.Views` to `cc.Views` when building `ContractConfig` in `handleDiscoveryEvent` (`internal/engine/discover.go:282-289`)
-- [x] Add `validateViews(dc.Views, prefix)` call in `validateDiscover` (`internal/config/validate.go`) for each discover entry
-- [x] Add `ViewPoller.AddContract(ctx context.Context, cs *contractState) ([]*types.TableSchema, error)` method that: builds entries via `buildEntry()`, appends to `vp.entries` (with mutex protection), spawns per-function polling goroutines, and returns view schemas
-- [x] Protect `ViewPoller.entries` with a `sync.Mutex` so `AddContract` is safe to call concurrently with `Status()` and `Run()`
-- [x] Call `ViewPoller.AddContract()` from `RegisterContract` (`engine.go`) when the contract has views — create view tables, add schemas to `contractState`, and notify the API server
-- [x] Call `ViewPoller.AddContract()` from `registerWithABI` (`factory.go`) and `registerSharedDiscoveredChild` (`discover.go`) when the contract has views
-- [x] Ensure `ViewPoller.SetOnEvent` is called during engine setup regardless of whether initial entries exist, so dynamically added views fire SSE callbacks
-- [x] Unit tests: discovered contract with views triggers view polling; admin-registered contract with views triggers view polling; AddContract on a running poller spawns goroutines that actually poll
-- [ ] Integration test: discover config with `views:` section — verify view tables are created and polled after UDC event is processed
+- [ ] Create `docs/GETTING-STARTED.md`
+- [ ] Prerequisites section: Go 1.25+ (for source build), or direct binary install. Docker optional for PostgreSQL
+- [ ] Installation walkthrough covering all three methods: asdf (recommended), binary release, build from source
+- [ ] First indexer tutorial: `ibis init --contract <STRK_address> --network mainnet --database memory` with real STRK token address, explaining each flag
+- [ ] Walk through the generated `ibis.config.yaml`, explaining each section (network, rpc, database, contracts, events)
+- [ ] Run the indexer: `ibis run`, explain the startup logs (ABI fetching, table creation, subscription, backfill)
+- [ ] Query data: demonstrate `ibis query` CLI with `--format table`, `--latest`, `--count`, and `--filter` flags
+- [ ] Query via REST API: show `curl` commands against the running API with filters and ordering
+- [ ] SSE streaming teaser: one `curl` to the `/stream` endpoint showing real-time events
+- [ ] "Next steps" section linking to Configuration Reference, Table Types Guide, Factory Guide, and Agent Skills Guide
+- [ ] Troubleshooting section: common issues (RPC connection failures, ABI fetch errors, port conflicts)
+- [ ] Brief "Agent skills" callout after the `ibis init` step: mention that `ibis-config` can generate configs from natural language (e.g., "index all Transfer events from the STRK token"), with install command and link to Agent Skills Guide
 
 **Implementation Notes**:
-- The `ViewPoller.Run()` method currently returns immediately when `entries` is empty. Dynamic view addition via `AddContract` should not depend on `Run()` being active — `AddContract` spawns its own goroutines with the provided context, making it safe to add views whether or not the poller's `Run()` goroutine was started. This avoids needing to change `Run()` behavior.
-- The engine always creates a `ViewPoller` in `setup()` (engine.go:584), so `e.poller` is never nil during runtime. But the `Run()` goroutine only starts if `HasEntries()` was true at launch (engine.go:468). For dynamically added views, `AddContract` manages its own goroutine lifecycle.
-- The `onEvent` callback is currently set on the poller only when `HasEntries()` is true at startup (engine.go:469). Move the `SetOnEvent` call before the HasEntries check so dynamic additions inherit the callback.
-- Three registration paths need the same view wiring: `RegisterContract` (admin API), `registerWithABI` (factory children + non-shared discovery), and `registerSharedDiscoveredChild` (shared-table discovery). Extract a helper like `e.startViewsForContract(ctx, cs)` to avoid duplicating the AddContract + CreateTable + schema registration logic in all three places.
-- For shared-table discovered contracts with views, view table naming should follow the shared convention (`{abi_name}_{function_name}`) so all instances of the same class hash share view tables too. This parallels how event shared tables work.
-- Config YAML shape for discover with views:
-  ```yaml
-  discover:
-    - class_hash: "0x47a9dc..."
-      abi: OptionToken
-      shared_tables: true
-      events:
-        - name: "*"
-          table:
-            type: log
-      views:
-        - function: get_strike
-          interval: 5m
-          table:
-            type: unique
-            unique_key: _view_key
-  ```
+- Use the STRK token contract (`0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d`) for the walkthrough — it has frequent Transfer events on mainnet, so users will see data immediately.
+- The tutorial should work end-to-end with `--database memory` so users don't need PostgreSQL installed for their first try.
+- Include expected output snippets for each command so users can verify they're on the right track.
+- Keep explanations concise but don't skip the "why" — a first-time user should understand what ibis is doing at each step.
+
+---
+
+#### 3.22b Configuration Reference
+
+**Description**: Complete reference documentation for every field in `ibis.config.yaml`. This is the authoritative source for config syntax, types, defaults, validation rules, and environment variable expansion. Organized hierarchically by config section with examples for each field.
+
+**Requirements**:
+- [ ] Create `docs/CONFIGURATION.md`
+- [ ] Top-level fields: `network` (mainnet/sepolia/custom), `rpc` (WSS/HTTP endpoint with scheme validation)
+- [ ] `database` section: `backend` (postgres/badger/memory), `postgres.*` (host, port, user, password, name), `badger.path` — with defaults and env var examples
+- [ ] `api` section: `host`, `port`, `cors_origins`, `admin_key` — with CORS and security guidance
+- [ ] `indexer` section: `start_block`, `pending_blocks`, `batch_size`, `udc_address`, `udc_event` (version, address_key/data, class_hash_key/data) — with guidance on when to customize UDC settings
+- [ ] `contracts[]` section: `name`, `address`, `abi` (file path / contract name / "fetch"), `start_block`, `events[]`, `views[]`, `factory`
+- [ ] `events[]` section: `name` (explicit or `"*"` wildcard), `table.type` (log/unique/aggregation), `table.unique_key`, `table.aggregate[]` — with wildcard override behavior explained
+- [ ] `factory` section: `event`, `child_address_field`, `child_abi`, `child_events`, `shared_tables`, `child_name_template` — with template variable reference
+- [ ] `views[]` section: `function`, `calldata`, `interval`, `table` (log/unique only), `headers` — with interval minimum (1s) and `_view_key` explanation
+- [ ] `discover[]` section: `class_hash`, `group`, `abi`, `events`, `shared_tables`, `views`, `name_template` — with template variable reference
+- [ ] Environment variable expansion: `${VAR_NAME}` syntax, where it applies, common patterns for secrets
+- [ ] Validation rules summary: all constraints enforced during config loading
+- [ ] Full annotated example config showing all features together
+- [ ] Minimal example configs: simplest possible config, memory-only dev config, PostgreSQL production config
+- [ ] Brief "Agent skill" callout: mention that `ibis-config` can generate complete configs from natural language or a contract address — useful for bootstrapping a config that you then customize manually. Link to Agent Skills Guide
+
+**Implementation Notes**:
+- Structure as a single page with a table of contents using markdown heading anchors. Each field gets: type, default value, required/optional, description, example.
+- Reference the actual validation logic in `internal/config/validate.go` and defaults in `internal/config/config.go` to ensure accuracy.
+- The UDC event section is advanced — note that most users will never need it (auto-detection handles mainnet/sepolia). Only relevant for devnets, appchains, or custom deployer contracts.
+
+---
+
+#### 3.22c REST API Reference
+
+**Description**: Complete reference for every REST API endpoint ibis exposes. Covers request/response formats, query parameters, headers, status codes, and example `curl` commands. This replaces the brief API section in the README with a full reference.
+
+**Requirements**:
+- [ ] Create `docs/API-REFERENCE.md`
+- [ ] System endpoints: `GET /v1/health` (response format), `GET /v1/status` (full response schema with contracts, cursors, factories, views)
+- [ ] Event list endpoint: `GET /v1/{contract}/{event}` — query params (limit, offset, order, field filters), response format (`{"data": [...], "count": N}`), Supabase-style filter operators (eq, neq, gt, gte, lt, lte)
+- [ ] Latest event: `GET /v1/{contract}/{event}/latest` — response format, use cases
+- [ ] Event count: `GET /v1/{contract}/{event}/count` — response format, filter support
+- [ ] Unique entries: `GET /v1/{contract}/{event}/unique` — when available (unique table type only), response format
+- [ ] Aggregation: `GET /v1/{contract}/{event}/aggregate` — response format (`{"data": {"column": value}}`), available operations
+- [ ] SSE streaming: `GET /v1/{contract}/{event}/stream` — content type, event format, `Last-Event-ID` reconnection, filter params
+- [ ] Factory endpoints: `GET /v1/{factory}/children`, `GET /v1/{factory}/children/count` — response formats, metadata filter support
+- [ ] Discovery endpoints: `GET /v1/discover/{classHash}/contracts` — response format
+- [ ] Admin endpoints: `POST /v1/admin/contracts`, `GET /v1/admin/contracts`, `PUT /v1/admin/contracts/{name}`, `DELETE /v1/admin/contracts/{name}` — request bodies, `X-Admin-Key` header, `?drop_tables=true` param
+- [ ] Query parameter reference table: all filter operators with examples
+- [ ] Common response fields: `event_id`, `contract_address`, `event_name`, `block_number`, `block_hash`, `transaction_hash`, `log_index`, `timestamp`, `status`, plus decoded event fields
+- [ ] Error responses: format, common error codes (400, 404, 500)
+- [ ] Pagination patterns: cursor-based, offset-based, best practices for large datasets
+- [ ] Brief "Agent skills" callout: mention `ibis-query` for natural language data queries against the API and `ibis-admin` for managing contracts via the admin endpoints. Link to Agent Skills Guide
+
+**Implementation Notes**:
+- Reference `internal/api/server.go` for route registration, `internal/api/handlers.go` for response formats, and `internal/api/query.go` for query parameter parsing.
+- Use generic placeholder contract/event names in the reference sections. Include a "Try it" box with real contract examples for key endpoints.
+- The status endpoint response is complex — include the full JSON schema since it's the primary discovery endpoint.
+
+---
+
+#### 3.22d CLI Reference
+
+**Description**: Complete reference for all `ibis` CLI commands, subcommands, flags, and usage patterns. Expands on the README's CLI section with full flag descriptions, examples, and output format documentation.
+
+**Requirements**:
+- [ ] Create `docs/CLI-REFERENCE.md`
+- [ ] `ibis init` command: all flags (`--contract`, `--output`, `--network`, `--rpc`, `--database`, `--non-interactive`), interactive vs non-interactive mode behavior, example workflows
+- [ ] `ibis run` command: `--config` flag, startup sequence description, graceful shutdown behavior (SIGINT/SIGTERM)
+- [ ] `ibis query` command: all flags documented with examples — `--limit`, `--offset`, `--order`, `--filter`, `--unique`, `--aggregate`, `--latest`, `--count`, `--children`, `--children-count`, `--contract-address`, `--format`, `--list`
+- [ ] Output format examples: `--format json` (one JSON object), `--format table` (aligned columns), `--format csv` (comma-separated with headers)
+- [ ] Filter syntax: `--filter "field=op.value"` with all operators (eq, neq, gt, gte, lt, lte), multiple filters, combining with other flags
+- [ ] Factory queries: `--children`, `--children-count`, querying shared table data with `--contract-address`
+- [ ] View function queries: querying view tables, `_view_key` filtering
+- [ ] `--list` flag: output format, table metadata shown
+- [ ] Common usage patterns: "get latest transfer", "count events since block X", "export to CSV", "query factory children"
+- [ ] Exit codes and error messages
+- [ ] Brief "Agent skill" callout: mention `ibis-query` for translating natural language questions into `ibis query` commands (e.g., "show me the top 10 transfers" becomes the right CLI invocation). Link to Agent Skills Guide
+
+**Implementation Notes**:
+- Reference `internal/cli/init.go`, `internal/cli/run.go`, and `internal/cli/query.go` for flag definitions and behavior.
+- Include the actual CLI help text (`ibis --help`, `ibis query --help`) as a starting point, then expand with examples and explanations.
+- The query command has mutual exclusivity rules (e.g., `--latest` and `--count` can't be combined) — document these clearly.
+
+---
+
+#### 3.22e Table Types Guide
+
+**Description**: Conceptual guide explaining the three table types (log, unique, aggregation), when to use each, how they behave, and how they map to database schemas. This is a "how to think about it" guide, not a reference — it helps users choose the right table type for their use case.
+
+**Requirements**:
+- [ ] Create `docs/TABLE-TYPES.md`
+- [ ] Overview: ibis creates database tables from event configs; the table type determines storage and query semantics
+- [ ] **Log tables**: append-only event log, every event is stored, use cases (transaction history, audit trails, analytics), example config, example queries, database schema (all standard columns + decoded event fields)
+- [ ] **Unique tables**: last-write-wins by a configurable key field, only the most recent event per key is stored, use cases (leaderboards, current state, latest price per token), `unique_key` field selection guidance, example config, example queries via `/unique` endpoint
+- [ ] **Aggregation tables**: auto-computed aggregate values updated on each event, supported operations (sum, count, avg), use cases (volume tracking, transfer counts, running averages), example config with multiple aggregates, example queries via `/aggregate` endpoint
+- [ ] **Wildcard with overrides**: explain the `"*"` pattern — all events default to one type, specific events override. Show a realistic config mixing all three types
+- [ ] **Choosing the right type**: decision tree or table mapping common use cases to table types
+- [ ] **Database representation**: how each type maps to PostgreSQL tables, BadgerDB keys, and in-memory structures
+- [ ] **View function tables**: brief mention that views also produce log or unique tables (link to Factory & Discovery guide for details)
+
+**Implementation Notes**:
+- Reference `internal/schema/` for how table schemas are built, and `internal/store/` for how each backend implements the three types.
+- Use concrete examples: ERC20 Transfer events as log tables, a game leaderboard as a unique table, volume tracking as an aggregation table.
+- The aggregation table is the most complex — include a worked example showing how `sum` and `count` update as events arrive.
+
+---
+
+#### 3.22f Factory & Discovery Guide
+
+**Description**: Guide covering ibis's advanced contract discovery features: factory contracts (automatic child detection), class hash discovery (UDC watching), shared tables, dynamic contract management via admin API, and view function polling. These features are what differentiate ibis from simple event indexers.
+
+**Requirements**:
+- [ ] Create `docs/ADVANCED-FEATURES.md`
+- [ ] **Factory contracts**: what factories are (contracts that deploy children), config structure (`factory` block), `child_address_field` explanation, child ABI resolution, `child_events` templating
+- [ ] **Shared tables**: why (thousands of children would create thousands of tables), how (`shared_tables: true`), `contract_address` column for disambiguation, querying with `?contract_address=eq.0x...`
+- [ ] **Child naming**: `child_name_template` with available variables (`{factory}`, `{short_address}`, `{address}`), default template
+- [ ] **Factory API**: `GET /v1/{factory}/children`, `GET /v1/{factory}/children/count`, metadata from factory event promoted to queryable fields
+- [ ] **Class hash discovery**: concept (watch for deployments of a known class hash via UDC), config structure (`discover[]` block), `class_hash`, `group`, `abi`, `shared_tables`, `name_template`
+- [ ] **UDC configuration**: `indexer.udc_address`, `indexer.udc_event` format options (auto/v0/v1), when to customize (devnet, appchains)
+- [ ] **Discovery API**: `GET /v1/discover/{classHash}/contracts`
+- [ ] **Dynamic contract management**: admin API overview, `POST /v1/admin/contracts` for runtime registration, `DELETE /v1/admin/contracts/{name}` for deregistration, `X-Admin-Key` authentication, use cases
+- [ ] **View function polling**: concept (periodically call read-only functions and index results), config structure (`views[]`), `function`, `calldata`, `interval`, `_view_key` for unique tables, log vs unique view tables
+- [ ] End-to-end example: configuring a DEX factory (AMM pair factory) with shared tables, child events, and view function polling
+- [ ] Brief "Agent skills" callout: mention `ibis-config` for generating factory/discovery configs from natural language, and `ibis-admin` for dynamically registering new contracts at runtime without restarting the indexer. Link to Agent Skills Guide
+
+**Implementation Notes**:
+- This is the "power user" guide — it covers features that most indexers don't have. Lead with the use case, then show the config, then explain the mechanics.
+- Reference the Jediswap or 10KSwap AMM factory pattern on Starknet as the motivating example for factories.
+- For discovery, reference the pattern of watching for all ERC20 deployments of a known class hash.
+- Keep the admin API section brief — it's documented fully in the API Reference. Focus on the "why" and "when" here.
+
+---
+
+#### 3.22g Real-Time Streaming (SSE) Guide
+
+**Description**: Guide covering ibis's Server-Sent Events (SSE) streaming for real-time event delivery to clients. Covers the SSE protocol, reconnection with gap-free replay, filtering, and integration patterns for web frontends and backend services.
+
+**Requirements**:
+- [ ] Create `docs/SSE-STREAMING.md`
+- [ ] **What is SSE**: brief intro to Server-Sent Events, why ibis uses SSE over WebSocket for one-directional event delivery
+- [ ] **Endpoint**: `GET /v1/{contract}/{event}/stream`, content type `text/event-stream`
+- [ ] **Event format**: `id: {block}:{logIndex}\ndata: {json}\n\n` with example
+- [ ] **Reconnection**: `Last-Event-ID` header, automatic gap-free replay, how ibis replays missed events on reconnect
+- [ ] **Filtering**: query params on the stream endpoint (same Supabase-style filters as REST), example: `?sender=eq.0x123`
+- [ ] **Client examples**: `curl` for terminal, JavaScript `EventSource` for web frontends, Go `net/http` for backend services
+- [ ] **Factory streaming**: streaming events from shared tables, filtering by child contract
+- [ ] **Best practices**: connection management, error handling, backpressure, when to use SSE vs polling
+
+**Implementation Notes**:
+- Reference `internal/api/sse.go` for the server implementation details.
+- The JavaScript `EventSource` example is particularly important — most ibis users will be web developers building frontends on top of indexed data.
+- Note the 64-event subscriber buffer — if a client falls too far behind, events are dropped (non-blocking delivery). This is by design to protect the indexer.
+
+---
+
+#### 3.22h Deployment Guide
+
+**Description**: Guide for deploying ibis in production environments. Covers Docker, docker-compose, environment configuration, PostgreSQL setup, and production best practices.
+
+**Requirements**:
+- [ ] Create `docs/DEPLOYMENT.md`
+- [ ] **Development setup**: `--database memory` for quick local dev, `ibis run` with default config
+- [ ] **Docker**: `make docker-build`, `make docker-run`, Dockerfile explanation, environment variables
+- [ ] **Docker Compose**: `make docker-compose-up`, included PostgreSQL service, config volume mounting, environment file
+- [ ] **PostgreSQL setup**: manual PostgreSQL setup (create database, user, permissions), connection string configuration, env var pattern for credentials
+- [ ] **Production checklist**: database backend (always PostgreSQL), appropriate `start_block`, `admin_key` for admin endpoints, CORS configuration, log monitoring
+- [ ] **Environment variables**: full list of `${VAR}` patterns used in config, `.env` file patterns
+- [ ] **Monitoring**: health check endpoint (`/v1/health`), status endpoint (`/v1/status`) for sync progress, what to alert on (sync lag, connection drops)
+- [ ] **Scaling considerations**: single indexer instance (writes), multiple API readers possible with shared PostgreSQL, backfill duration estimates
+- [ ] **Backup and recovery**: cursor-based resume (ibis picks up where it left off), database backup strategies
+
+**Implementation Notes**:
+- Reference the existing `Dockerfile`, `docker-compose.yaml`, and `configs/ibis.config.docker.yaml` for accuracy.
+- Production deployment is PostgreSQL-only in practice — BadgerDB is for single-machine/embedded use, memory is for dev/test. Make this clear.
+- Include a minimal `docker-compose.yaml` snippet that users can copy-paste.
+
+---
+
+#### 3.22i Update SPEC.md
+
+**Description**: Bring `docs/SPEC.md` up to date with the current state of the codebase. The existing SPEC was written at project inception and is missing major features (factory support, discovery, views, admin API, shared tables, dynamic contracts) and has outdated information (Go version, project structure, store interface, API endpoints). This is a targeted update, not a rewrite — preserve the document's structure and voice while adding missing content and correcting outdated sections.
+
+**Requirements**:
+- [ ] Update **Tech Stack** table: Go version to 1.25+, add any new dependencies
+- [ ] Update **Project Structure** tree: add missing files/directories that have been added since inception (factory, discovery, view poller, admin handlers, shared table logic, SSE, forward types, etc.)
+- [ ] Update **ABI Parser** section: add CairoTuple support, mention any new type handling
+- [ ] Update **Config Manager** section: add `discover[]`, `views[]`, `api.cors_origins`, `api.admin_key`, `indexer.udc_address`, `indexer.udc_event`, per-contract `start_block`, factory `shared_tables` and `child_name_template`
+- [ ] Update **Indexing Engine** section: add factory child detection and registration, discovery/UDC watching, view function polling, dynamic contract lifecycle
+- [ ] Update **Store Interface** section: update the interface definition to match current methods (`CountEvents`, `DropTable`, `SaveDynamicContract`, `GetDynamicContracts`, `DeleteDynamicContract`, `DeleteCursor`, `GetAllCursors`)
+- [ ] Update **API Server** section: add factory endpoints, discovery endpoints, admin endpoints, SSE streaming details, CORS
+- [ ] Update **Data Models** section: add any new types or updated fields (SharedTable on TableSchema, factory/discovery types)
+- [ ] Update **Key Decisions** table: add decisions made since inception (shared tables approach, UDC watching strategy, admin API design, SSE over WebSocket for streaming)
+- [ ] Add **Factory & Discovery** section to Core Modules: factory detection flow, shared table mechanics, UDC event parsing, discovery registration
+- [ ] Add **View Function Polling** section to Core Modules: polling loop, result indexing, `_view_key` semantics
+- [ ] Cross-reference new documentation pages where appropriate (link to Getting Started, API Reference, etc.)
+
+**Implementation Notes**:
+- Read the actual codebase (store interface, config struct, API routes, engine methods) to ensure SPEC.md matches reality — don't rely on memory or the roadmap.
+- Preserve the existing SPEC.md tone and structure. It's a technical specification, not a user guide — keep it precise and implementation-focused.
+- The Store interface has grown significantly — the current interface in SPEC.md is a simplified version. Update it to match the actual `Store` interface in `internal/store/store.go`.
+- The project structure tree should match what `ls -R` shows, not what was planned. Add new directories and files, remove any that no longer exist.
+
+---
+
+#### 3.22j Agent Skills Guide
+
+**Description**: Dedicated guide for ibis's three Claude Code agent skills: `ibis-config` (config generation), `ibis-query` (natural language data queries), and `ibis-admin` (runtime contract management). This is the central reference that all other docs link to from their "Agent skill" callouts. Covers installation, what each skill does, example prompts, and how the skills complement the CLI/API workflows.
+
+**Requirements**:
+- [ ] Create `docs/AGENT-SKILLS.md`
+- [ ] **Overview**: ibis ships three agent skills for Claude Code that let you interact with the indexer using natural language — generating configs, querying data, and managing contracts at runtime
+- [ ] **Installation**: `npx skills add b-j-roberts/ibis` (all skills), or individual install commands for `ibis-config`, `ibis-query`, `ibis-admin`. Prerequisites: Claude Code CLI installed
+- [ ] **ibis-config skill**: what it does (generates `ibis.config.yaml` from contract addresses or natural language), when to use it (bootstrapping a new config, adding contracts, modifying event selections), example prompts ("generate an ibis config for the STRK token", "add Transfer and Approval events as log tables", "set up a factory config for this AMM"), what it produces (complete YAML config file)
+- [ ] **ibis-query skill**: what it does (translates natural language questions into `ibis query` CLI commands or REST API `curl` calls), when to use it (exploring indexed data, building queries without memorizing flag syntax), example prompts ("show me the 10 most recent transfers", "how many swaps happened today?", "what's the total trading volume?", "list all factory children"), output formats (JSON, table, CSV)
+- [ ] **ibis-admin skill**: what it does (manages contracts on a running ibis instance via the admin API), when to use it (registering new contracts at runtime, checking indexer health, deregistering contracts), example prompts ("add the STRK token to the indexer", "what's the indexer status?", "remove MyContract and drop its tables", "list all registered contracts"), prerequisite (ibis must be running with `ibis run`)
+- [ ] **Skill vs CLI/API comparison table**: when to use which — skill for exploration/bootstrapping, CLI for scripting/automation, API for application integration
+- [ ] **Workflow examples**: end-to-end scenarios combining skills with manual steps — e.g., "Use `ibis-config` to generate a config, manually review and tweak it, `ibis run` to start, use `ibis-query` to explore the data, use `ibis-admin` to add another contract at runtime"
+- [ ] **Troubleshooting**: skill not found (install instructions), skill produces incorrect query (how to refine prompts), admin skill can't connect (ibis not running or wrong API URL)
+
+**Implementation Notes**:
+- This is the one page that gives all three skills equal treatment. Other doc pages just have brief callouts (1–3 sentences) that link here.
+- The example prompts should be realistic and demonstrate the range of natural language the skills understand — not just simple cases.
+- The ibis-admin skill (3.21b) may not be implemented yet when this doc is written. If so, include it with a note that it's coming soon, since the skill is scoped and the API endpoints already exist.
+- Keep the tone practical and example-driven. Users should be able to scan the example prompts and immediately understand what each skill does.
+- The comparison table is important — it prevents confusion about when to use a skill vs the CLI vs direct API calls. Skills are best for exploration and one-off tasks; CLI for scripts and pipelines; API for application code.
 
 ---
 
