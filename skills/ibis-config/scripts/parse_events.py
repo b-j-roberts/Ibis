@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Parse a Starknet ABI JSON and extract event definitions with field details.
+"""Parse a Starknet ABI JSON and extract event definitions and view function candidates.
 
 Usage: parse_events.py <abi.json>
        cat abi.json | parse_events.py -
 
-Output: structured event summary suitable for config generation decisions.
+Output: structured JSON with events, views, and summary suitable for config generation.
 """
 
 import sys
 import json
+import re
 
 # Cairo type categories for table type recommendations
 NUMERIC_TYPES = {
@@ -46,18 +47,57 @@ TYPE_MAP = {
     "core::byte_array::ByteArray": "string",
 }
 
+# Keywords suggesting fast polling intervals
+FAST_POLL_KEYWORDS = {"price", "rate", "exchange", "oracle", "feed", "tick"}
+SLOW_POLL_KEYWORDS = {"config", "owner", "admin", "name", "symbol", "decimals", "metadata"}
+
 
 def short_type(full_type: str) -> str:
     """Extract short type name from fully qualified Cairo type."""
+    # Handle tuple types: (core::integer::u128, core::integer::u256) -> (u128, u256)
+    if is_tuple_type(full_type):
+        inner = full_type.strip()[1:-1]  # Remove parens
+        parts = [short_type(p.strip()) for p in _split_tuple_elements(inner)]
+        return "(" + ", ".join(parts) + ")"
     if "::" in full_type:
         return full_type.split("::")[-1]
     return full_type
+
+
+def _split_tuple_elements(s: str) -> list:
+    """Split tuple inner string by commas, respecting nested parens."""
+    parts = []
+    depth = 0
+    current = []
+    for ch in s:
+        if ch == '(':
+            depth += 1
+            current.append(ch)
+        elif ch == ')':
+            depth -= 1
+            current.append(ch)
+        elif ch == ',' and depth == 0:
+            parts.append(''.join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append(''.join(current))
+    return parts
+
+
+def is_tuple_type(cairo_type: str) -> bool:
+    """Check if a Cairo type is a tuple: (T1, T2, ...)."""
+    stripped = cairo_type.strip()
+    return stripped.startswith("(") and stripped.endswith(")")
 
 
 def get_sql_type(cairo_type: str) -> str:
     """Map Cairo type to ibis column type."""
     if cairo_type in TYPE_MAP:
         return TYPE_MAP[cairo_type]
+    if is_tuple_type(cairo_type):
+        return "string (JSON)"
     if "Array" in cairo_type or "Span" in cairo_type:
         return "string (JSON array)"
     return "string (JSON)"
@@ -110,6 +150,7 @@ def parse_abi(abi_data):
                 "sql_type": get_sql_type(field_type),
                 "is_numeric": is_numeric(field_type),
                 "is_address": is_address(field_type),
+                "is_tuple": is_tuple_type(field_type),
             }
 
             if field_kind == "key":
@@ -138,6 +179,112 @@ def parse_abi(abi_data):
         })
 
     return events
+
+
+def parse_views(abi_data):
+    """Parse ABI and extract view function candidates."""
+    views = []
+
+    for item in abi_data:
+        # Look for interface items that contain functions
+        if item.get("type") == "interface":
+            for fn in item.get("items", []):
+                if fn.get("type") == "function" and fn.get("state_mutability") == "view":
+                    views.append(_extract_view(fn))
+        # Also check top-level functions (some ABIs flatten them)
+        elif item.get("type") == "function" and item.get("state_mutability") == "view":
+            views.append(_extract_view(item))
+
+    return views
+
+
+def _extract_view(fn):
+    """Extract view function details from an ABI function entry."""
+    name = fn.get("name", "")
+    inputs = fn.get("inputs", [])
+    outputs = fn.get("outputs", [])
+
+    input_fields = []
+    for inp in inputs:
+        inp_type = inp.get("type", "")
+        input_fields.append({
+            "name": inp.get("name", ""),
+            "cairo_type": short_type(inp_type),
+            "full_type": inp_type,
+            "sql_type": get_sql_type(inp_type),
+            "is_tuple": is_tuple_type(inp_type),
+        })
+
+    output_fields = []
+    for out in outputs:
+        out_type = out.get("type", "")
+        output_fields.append({
+            "name": out.get("name", "") or "result",
+            "cairo_type": short_type(out_type),
+            "full_type": out_type,
+            "sql_type": get_sql_type(out_type),
+            "is_tuple": is_tuple_type(out_type),
+        })
+
+    # Recommend polling interval based on function name
+    interval = recommend_view_interval(name)
+
+    # Recommend table type: unique with _view_key for simple getters, log for complex
+    has_inputs = len(input_fields) > 0
+    recommended_table = "unique" if not has_inputs else "log"
+    recommended_key = "_view_key" if not has_inputs else None
+
+    return {
+        "name": name,
+        "inputs": input_fields,
+        "outputs": output_fields,
+        "has_inputs": has_inputs,
+        "input_count": len(input_fields),
+        "output_count": len(output_fields),
+        "recommended_interval": interval,
+        "recommended_table_type": recommended_table,
+        "recommended_unique_key": recommended_key,
+        "is_good_candidate": _is_good_view_candidate(name, input_fields, output_fields),
+    }
+
+
+def recommend_view_interval(name: str) -> str:
+    """Recommend polling interval based on view function name."""
+    name_lower = name.lower()
+
+    # Fast: price-like data
+    if any(kw in name_lower for kw in FAST_POLL_KEYWORDS):
+        return "5s"
+
+    # Slow: rarely changing state
+    if any(kw in name_lower for kw in SLOW_POLL_KEYWORDS):
+        return "5m"
+
+    # Default: 30s for most views
+    return "30s"
+
+
+def _is_good_view_candidate(name: str, inputs: list, outputs: list) -> bool:
+    """Determine if a view function is a good polling candidate.
+
+    Best candidates: no inputs or simple felt inputs, with meaningful outputs.
+    Poor candidates: complex struct inputs, pagination parameters, etc.
+    """
+    if not outputs:
+        return False
+
+    # Functions with no inputs are always good candidates
+    if not inputs:
+        return True
+
+    # Functions with only simple felt/address inputs are decent candidates
+    simple_input_types = {"felt252", "ContractAddress", "ClassHash",
+                          "u8", "u16", "u32", "u64", "u128", "u256"}
+    for inp in inputs:
+        if inp["cairo_type"] not in simple_input_types:
+            return False
+
+    return True
 
 
 def recommend_table_type(event):
@@ -184,13 +331,11 @@ def main():
             abi_data = json.load(f)
 
     events = parse_abi(abi_data)
+    views = parse_views(abi_data)
 
-    if not events:
-        print("No events found in ABI.", file=sys.stderr)
-        sys.exit(1)
+    output = {"events": [], "views": [], "summary": {}}
 
-    output = {"events": [], "summary": {}}
-
+    # Process events
     for event in events:
         rec_type, rec_reason = recommend_table_type(event)
         unique_key_candidates = [f["name"] for f in event["key_fields"] if f["is_address"]]
@@ -218,6 +363,22 @@ def main():
         }
         output["events"].append(event_output)
 
+    # Process views
+    for view in views:
+        view_output = {
+            "name": view["name"],
+            "inputs": view["inputs"],
+            "outputs": view["outputs"],
+            "has_inputs": view["has_inputs"],
+            "recommended_interval": view["recommended_interval"],
+            "recommended_table_type": view["recommended_table_type"],
+            "recommended_unique_key": view["recommended_unique_key"],
+            "is_good_candidate": view["is_good_candidate"],
+        }
+        output["views"].append(view_output)
+
+    # Summary
+    good_view_candidates = [v for v in views if v["is_good_candidate"]]
     output["summary"] = {
         "total_events": len(events),
         "events_with_numeric_fields": sum(1 for e in events if e["has_numeric"]),
@@ -229,7 +390,14 @@ def main():
             and any(kw in e["name"].lower()
                     for kw in ["created", "deployed", "registered", "spawned", "new"])
         ],
+        "total_views": len(views),
+        "good_view_candidates": len(good_view_candidates),
+        "view_candidate_names": [v["name"] for v in good_view_candidates],
     }
+
+    if not events and not views:
+        print("No events or view functions found in ABI.", file=sys.stderr)
+        sys.exit(1)
 
     print(json.dumps(output, indent=2))
 
