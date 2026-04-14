@@ -128,6 +128,8 @@ What each flag does:
 - `--network mainnet` -- connect to Starknet mainnet (sets a default public RPC)
 - `--database memory` -- store data in memory (no setup required, perfect for trying things out)
 
+> **Note**: You may see an `"RPC spec version mismatch"` warning during `ibis init` — this is safe to ignore (see [Step 3](#step-3-run-the-indexer) for details).
+
 > **Note**: If your terminal doesn't support interactive prompts (CI pipelines, Docker containers, scripts, or AI coding assistants), skip to the [non-interactive command](#non-interactive) below.
 
 Ibis enters interactive mode. It will:
@@ -245,11 +247,11 @@ time=... level=INFO msg="created table" component=engine name=strk_approval type
 
 API server listening on 0.0.0.0:8080
 Starting indexer...
+time=... level=INFO msg="API server starting" component=api addr=0.0.0.0:8080
 time=... level=INFO msg="start block resolved" component=engine contract=STRK source=chain_tip value=...
 time=... level=INFO msg="contract start block" component=engine contract=STRK start_block=...
-time=... level=INFO msg="API server starting" component=api addr=0.0.0.0:8080
-time=... level=WARN msg="WSS dial failed, retrying" error=... backoff=1s attempt=1  # may appear once or twice — normal
-time=... level=INFO msg="WSS subscription failed, falling back to polling" ...
+time=... level=WARN msg="WSS dial failed, retrying" error=... backoff=1s attempt=1  # may appear a few times — normal
+time=... level=WARN msg="WSS subscription failed, falling back to polling" ...
 time=... level=INFO msg="starting polling fallback" component=subscriber contract=0x4718f...938d from_block=...
 ```
 

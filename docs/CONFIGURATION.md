@@ -2,7 +2,7 @@
 
 Complete reference for `ibis.config.yaml`. This document covers every field, its type, default value, validation rules, and usage examples.
 
-> **Tip:** The `ibis-config` agent skill can generate complete configs from natural language or a contract address — useful for bootstrapping a config that you then customize manually. See the [Agent Skills](#agent-skills) section in the README.
+> **Tip:** The `ibis-config` agent skill can generate complete configs from natural language or a contract address — useful for bootstrapping a config that you then customize manually. See the [Agent Skills](../README.md#agent-skills) section in the README.
 
 ---
 
@@ -80,7 +80,7 @@ Complete reference for `ibis.config.yaml`. This document covers every field, its
 | Required | Yes |
 | Values | `mainnet`, `sepolia`, `custom` |
 
-The Starknet network to connect to. Determines default UDC auto-detection behavior.
+The Starknet network to connect to. Determines default UDC auto-detection behavior. Use `custom` for devnets, appchains, or networks other than mainnet/Sepolia.
 
 ```yaml
 network: mainnet
@@ -238,7 +238,9 @@ api:
 | Required | No |
 | Default | — |
 
-Global starting block for indexing. When set to `0`, ibis starts from block 0 (genesis). When set to a specific block number, ibis backfills from that block on startup. Omit this field entirely to start from the latest block (chain tip).
+Global starting block for indexing. When set to `0`, ibis starts from block 0 (genesis). When set to a specific block number, ibis backfills from that block on startup.
+
+> **Note:** Omitting `start_block` entirely and setting it to `0` are different behaviors. Omitting starts from the chain tip (latest block); setting to `0` starts from genesis.
 
 Individual contracts can override this with their own `start_block`.
 
@@ -341,7 +343,7 @@ At least one `contracts[]` entry or one `discover[]` entry is required.
 | Type | `string` |
 | Required | Yes |
 
-Unique identifier for this contract. Used in API routes (`/v1/{name}/{event}`) and table names.
+Identifier for this contract. Should be unique — used in API routes (`/v1/{name}/{event}`) and table names.
 
 ### `contracts[].address`
 
@@ -387,7 +389,7 @@ Per-contract override for the starting block. Useful when contracts were deploye
 ```yaml
 contracts:
   - name: NewContract
-    address: "0x..."
+    address: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" # Replace with your contract address
     abi: fetch
     start_block: 800000
     events:
@@ -544,6 +546,7 @@ The field in the factory event that contains the deployed child contract's addre
 |----------|-------|
 | Type | `string` |
 | Required | No |
+| Default | `fetch` |
 
 ABI source for child contracts. Same resolution modes as `contracts[].abi`: `fetch`, file path, or contract name.
 
@@ -654,7 +657,7 @@ How often to poll this view function. Uses Go duration syntax: `1s`, `30s`, `5m`
 
 Table configuration for storing view results. Note: `aggregation` type is not supported for views.
 
-When using `unique` table type, a `_view_key` column is automatically used as the unique key, ensuring only the latest poll result is retained.
+When using `unique` table type, set `unique_key` to `_view_key` — a special column ibis creates automatically to identify each poll result, ensuring only the latest result is retained.
 
 ```yaml
 views:
@@ -818,7 +821,9 @@ The following constraints are enforced when the config is loaded:
 
 | Rule | Error |
 |------|-------|
+| `network` is required | `network: required` |
 | `network` must be `mainnet`, `sepolia`, or `custom` | `network: must be one of: mainnet, sepolia, custom` |
+| `rpc` is required | `rpc: required` |
 | `rpc` must use `wss://`, `ws://`, `https://`, or `http://` scheme | `rpc: must use wss://, ws://, https://, or http:// scheme` |
 | `database.backend` must be `postgres`, `badger`, or `memory` | `database.backend: must be one of: postgres, badger, memory` |
 | When backend is `postgres`: `host`, `user`, and `name` are required | `database.postgres.host: required when backend is postgres` |
@@ -831,8 +836,10 @@ The following constraints are enforced when the config is loaded:
 | Aggregate `operation` must be `sum`, `count`, or `avg` | `operation: must be one of: sum, count, avg` |
 | Factory requires `event`, `child_address_field`, and at least one `child_events[]` | `factory.event: required` |
 | View `table.type` must be `log` or `unique` (not `aggregation`) | `table.type: must be one of: log, unique (aggregation not supported for views)` |
+| View `interval` is required | `interval: required` |
 | View `interval` minimum is `1s` | `interval: minimum interval is 1s` |
 | View `calldata[]` elements must be `0x`-prefixed hex felts | `calldata[N]: must start with 0x` |
+| Discover `abi` is required | `discover[N].abi: required` |
 | Discover `class_hash` must be unique across all entries | `class_hash: duplicate class hash` |
 | Discover `group` must be lowercase alphanumeric with hyphens only | `group: must be lowercase alphanumeric with hyphens only` |
 | Discover with `shared_tables: true` requires a named ABI (not `fetch` or file path) | `abi: must be a named ABI...` |
@@ -887,7 +894,7 @@ contracts:
 
   # Mixed table types with wildcard override
   - name: Game
-    address: "0x..."
+    address: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" # Replace with your contract address
     abi: fetch
     start_block: 600000
     events:
@@ -919,7 +926,7 @@ contracts:
 
   # Factory contract with shared tables
   - name: AMM
-    address: "0x..."
+    address: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" # Replace with your contract address
     abi: fetch
     events:
       - name: PairCreated
@@ -1001,7 +1008,7 @@ indexer:
 
 contracts:
   - name: TestContract
-    address: "0x..."
+    address: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" # Replace with your contract address
     abi: ./target/dev/MyContract.contract_class.json
     events:
       - name: "*"
@@ -1040,7 +1047,7 @@ indexer:
 
 contracts:
   - name: MyContract
-    address: "0x..."
+    address: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" # Replace with your contract address
     abi: fetch
     events:
       - name: "*"
