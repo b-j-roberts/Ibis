@@ -51,7 +51,7 @@ func (e *Engine) processEvent(ctx context.Context, raw *provider.RawEvent) error
 
 	decoded["block_number"] = raw.BlockNumber
 	decoded["log_index"] = logIndex
-	decoded["timestamp"] = uint64(0) // Populated from block data when available.
+	decoded["timestamp"] = raw.Timestamp
 	decoded["event_name"] = eventDef.Name
 	decoded["contract_address"] = raw.ContractAddress.String()
 	decoded["contract_name"] = cs.config.Name

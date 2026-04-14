@@ -353,6 +353,11 @@ func (s *EventSubscriber) processWSSEvents(ctx context.Context, session *wssSess
 				continue
 			}
 
+			var ts uint64
+			if t, err := s.provider.GetBlockTimestamp(ctx, evt.BlockNumber); err == nil {
+				ts = t
+			}
+
 			rawEvent := RawEvent{
 				BlockNumber:     evt.BlockNumber,
 				BlockHash:       evt.BlockHash,
@@ -361,6 +366,7 @@ func (s *EventSubscriber) processWSSEvents(ctx context.Context, session *wssSess
 				Keys:            evt.Keys,
 				Data:            evt.Data,
 				FinalityStatus:  string(evt.FinalityStatus),
+				Timestamp:       ts,
 			}
 
 			select {
@@ -441,6 +447,9 @@ func (s *EventSubscriber) pollEvents(ctx context.Context, contract ContractSubsc
 
 		logger.Debug("polled block range", "from", *lastBlock, "to", endBlock, "events", len(events))
 
+		// Enrich events with block timestamps.
+		s.resolveTimestamps(ctx, events, logger)
+
 		for _, evt := range events {
 			select {
 			case s.events <- evt:
@@ -463,6 +472,35 @@ func (s *EventSubscriber) pollEvents(ctx context.Context, contract ContractSubsc
 			logger.Debug("polling stopped", "reason", ctx.Err())
 			return ctx.Err()
 		case <-time.After(interval):
+		}
+	}
+}
+
+// resolveTimestamps enriches a batch of events with block timestamps.
+// Fetches each unique block header once via the provider's cached method.
+// Failures are logged but do not block event delivery (timestamp stays 0).
+func (s *EventSubscriber) resolveTimestamps(ctx context.Context, events []RawEvent, logger *slog.Logger) {
+	// Collect unique block numbers.
+	blocks := make(map[uint64]struct{})
+	for i := range events {
+		blocks[events[i].BlockNumber] = struct{}{}
+	}
+
+	// Fetch timestamps (provider caches results).
+	timestamps := make(map[uint64]uint64, len(blocks))
+	for bn := range blocks {
+		ts, err := s.provider.GetBlockTimestamp(ctx, bn)
+		if err != nil {
+			logger.Debug("failed to fetch block timestamp", "block", bn, "error", err)
+			continue
+		}
+		timestamps[bn] = ts
+	}
+
+	// Apply timestamps to events.
+	for i := range events {
+		if ts, ok := timestamps[events[i].BlockNumber]; ok {
+			events[i].Timestamp = ts
 		}
 	}
 }
@@ -496,6 +534,9 @@ func (s *EventSubscriber) Backfill(ctx context.Context, contract ContractSubscri
 		if err != nil {
 			return fmt.Errorf("backfill events [%d, %d]: %w", current, end, err)
 		}
+
+		// Enrich events with block timestamps.
+		s.resolveTimestamps(ctx, events, logger)
 
 		for _, evt := range events {
 			select {

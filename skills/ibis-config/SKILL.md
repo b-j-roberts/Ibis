@@ -34,8 +34,8 @@ bash SKILL_DIR/scripts/fetch_abi.sh <contract_address> [rpc_url]
 ```
 
 Default RPC endpoints:
-- **Mainnet**: `https://starknet-rpc.publicnode.com`
-- **Sepolia**: `https://starknet-sepolia-rpc.publicnode.com`
+- **Mainnet**: `https://rpc.starknet.lava.build`
+- **Sepolia**: `https://rpc.starknet-sepolia.lava.build`
 
 Save output and parse events + views:
 
@@ -135,7 +135,7 @@ Read `references/config-schema.md` for complete schema specification, defaults, 
 # Docs: https://github.com/...
 
 network: mainnet
-rpc: https://starknet-rpc.publicnode.com  # WSS preferred for production
+rpc: https://rpc.starknet.lava.build  # WSS preferred for production
 
 database:
   backend: memory  # Use postgres for production

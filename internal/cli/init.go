@@ -52,8 +52,8 @@ func init() {
 
 // defaultRPCURLs maps network names to default public RPC endpoints.
 var defaultRPCURLs = map[string]string{
-	"mainnet": "https://starknet-rpc.publicnode.com",
-	"sepolia": "https://starknet-sepolia-rpc.publicnode.com",
+	"mainnet": "https://rpc.starknet.lava.build",
+	"sepolia": "https://rpc.starknet-sepolia.lava.build",
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -480,7 +480,8 @@ func buildConfig(network, rpcURL, database string, contracts []config.ContractCo
 	cfg.API.Host = "0.0.0.0"
 	cfg.API.Port = 8080
 
-	cfg.Indexer.StartBlock = config.Uint64Ptr(0)
+	// StartBlock left nil so the indexer starts from the chain tip by default.
+	// Users can set start_block in the config to backfill from a specific block.
 	cfg.Indexer.PendingBlocks = true
 	cfg.Indexer.BatchSize = 10
 
@@ -574,12 +575,12 @@ func buildCleanYAML(cfg *config.Config) yaml.Node {
 
 	// Indexer.
 	idx := &yaml.Node{Kind: yaml.MappingNode}
-	startBlockVal := uint64(0)
 	if cfg.Indexer.StartBlock != nil {
-		startBlockVal = *cfg.Indexer.StartBlock
+		idx.Content = append(idx.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "start_block"}, scalar(fmt.Sprintf("%d", *cfg.Indexer.StartBlock)),
+		)
 	}
 	idx.Content = append(idx.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "start_block"}, scalar(fmt.Sprintf("%d", startBlockVal)),
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "pending_blocks"}, scalar(fmt.Sprintf("%t", cfg.Indexer.PendingBlocks)),
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "batch_size"}, scalar(fmt.Sprintf("%d", cfg.Indexer.BatchSize)),
 	)

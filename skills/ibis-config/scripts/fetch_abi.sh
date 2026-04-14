@@ -3,15 +3,15 @@
 #
 # Usage: fetch_abi.sh <contract_address> [rpc_url]
 #
-# Default RPC: https://starknet-rpc.publicnode.com
-# For sepolia: https://starknet-sepolia-rpc.publicnode.com
+# Default RPC: https://rpc.starknet.lava.build
+# For sepolia: https://rpc.starknet-sepolia.lava.build
 #
 # Output: raw ABI JSON array to stdout
 
 set -euo pipefail
 
 CONTRACT_ADDRESS="${1:?Usage: fetch_abi.sh <contract_address> [rpc_url]}"
-RPC_URL="${2:-https://starknet-rpc.publicnode.com}"
+RPC_URL="${2:-https://rpc.starknet.lava.build}"
 
 # Fetch class at latest block
 RESPONSE=$(curl -s -X POST "$RPC_URL" \

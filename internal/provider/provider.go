@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/NethermindEth/juno/core/felt"
 	"github.com/NethermindEth/starknet.go/rpc"
@@ -22,6 +23,7 @@ type RawEvent struct {
 	Keys            []*felt.Felt
 	Data            []*felt.Felt
 	FinalityStatus  string
+	Timestamp       uint64
 }
 
 // ContractSubscription defines event subscription parameters for a contract.
@@ -46,6 +48,10 @@ type StarknetProvider struct {
 	httpURL string
 	wsURL   string
 	logger  *slog.Logger
+
+	// Block timestamp cache: block number -> Unix timestamp.
+	tsMu    sync.RWMutex
+	tsCache map[uint64]uint64
 }
 
 // New creates a StarknetProvider from an RPC URL.
@@ -75,12 +81,54 @@ func New(ctx context.Context, rpcURL string, logger *slog.Logger) (*StarknetProv
 		httpURL: httpURL,
 		wsURL:   wsURL,
 		logger:  logger,
+		tsCache: make(map[uint64]uint64),
 	}, nil
 }
 
 // BlockNumber returns the latest block number from the chain.
 func (p *StarknetProvider) BlockNumber(ctx context.Context) (uint64, error) {
 	return p.httpRPC.BlockNumber(ctx)
+}
+
+// GetBlockTimestamp returns the Unix timestamp for a block, using a cache
+// to avoid redundant RPC calls. Multiple events in the same block share one fetch.
+func (p *StarknetProvider) GetBlockTimestamp(ctx context.Context, blockNumber uint64) (uint64, error) {
+	p.tsMu.RLock()
+	if ts, ok := p.tsCache[blockNumber]; ok {
+		p.tsMu.RUnlock()
+		return ts, nil
+	}
+	p.tsMu.RUnlock()
+
+	blockID := rpc.BlockID{Number: &blockNumber}
+	result, err := p.httpRPC.BlockWithTxHashes(ctx, blockID)
+	if err != nil {
+		return 0, fmt.Errorf("fetching block %d header: %w", blockNumber, err)
+	}
+
+	var ts uint64
+	switch b := result.(type) {
+	case *rpc.BlockTxHashes:
+		ts = b.Timestamp
+	case *rpc.PreConfirmedBlockTxHashes:
+		ts = b.Timestamp
+	default:
+		return 0, fmt.Errorf("unexpected block type for block %d", blockNumber)
+	}
+
+	p.tsMu.Lock()
+	p.tsCache[blockNumber] = ts
+	// Evict old entries to bound memory (keep last 10000 blocks).
+	if len(p.tsCache) > 10000 {
+		for k := range p.tsCache {
+			if k < blockNumber-10000 {
+				delete(p.tsCache, k)
+			}
+		}
+	}
+	p.tsMu.Unlock()
+
+	return ts, nil
 }
 
 // GetEvents fetches events in a block range, automatically paginating via

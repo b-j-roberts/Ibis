@@ -33,7 +33,7 @@ Scaffold an `ibis.config.yaml` by inspecting contracts on-chain. Fetches the con
 When run without `--non-interactive`, ibis walks you through each configuration step:
 
 1. **Select network** -- choose `mainnet`, `sepolia`, or `custom`
-2. **RPC endpoint** -- enter URL (defaults to `https://starknet-rpc.publicnode.com` for mainnet, similar for sepolia)
+2. **RPC endpoint** -- enter URL (defaults to `https://rpc.starknet.lava.build` for mainnet, similar for sepolia)
 3. **Database backend** -- choose `memory`, `badger`, or `postgres`
 4. **Contract addresses** -- enter one or more `0x...` addresses
 5. **Contract naming** -- name each contract (defaults to `Contract_` + first 6 hex chars)

@@ -112,7 +112,7 @@ Use "ibis [command] --help" for more information about a command.
 
 We'll index the **STRK token** on Starknet mainnet. It's an ERC-20 token with frequent Transfer events, so you'll see data as the indexer processes blocks.
 
-> **Note**: The default generated config sets `start_block: 0`, which means the indexer starts from genesis and backfills the entire chain — you'll see data accumulating as it catches up. To start from the chain tip instead (only new events), remove the `start_block` field from your config. To backfill a specific range, set `start_block` to a recent block number. See [Verify data is flowing](#step-4-verify-data-is-flowing) and [Troubleshooting](#no-data-appearing) for more.
+> **Note**: The default generated config omits `start_block`, which means the indexer starts from the chain tip and only indexes new events going forward. To backfill historical data, add `start_block` to your config with a specific block number. See [Verify data is flowing](#step-4-verify-data-is-flowing) and [Troubleshooting](#no-data-appearing) for more.
 
 ### Step 1: Generate a config
 
@@ -132,7 +132,7 @@ What each flag does:
 
 Ibis enters interactive mode. It will:
 
-1. **Prompt for an RPC endpoint** -- press Enter to accept the default (`https://starknet-rpc.publicnode.com`)
+1. **Prompt for an RPC endpoint** -- press Enter to accept the default (`https://rpc.starknet.lava.build`)
 2. **Ask you to name the contract** -- type `STRK` and press Enter
 3. **Fetch the ABI** from the chain and list the available events (e.g., `Transfer`, `Approval`)
 4. **Ask which events to index** -- select "Yes" to index all events with the wildcard (`*`)
@@ -141,7 +141,7 @@ Ibis enters interactive mode. It will:
 Ibis Config Generator
 ========================================
 
-(default: https://starknet-rpc.publicnode.com)
+(default: https://rpc.starknet.lava.build)
 RPC endpoint URL: <press Enter>
 
 Name for contract 0x04718f...938d: STRK
@@ -189,14 +189,13 @@ Open `ibis.config.yaml`. Here's what was generated:
 # Run `ibis run` to start indexing with this config.
 
 network: mainnet
-rpc: https://starknet-rpc.publicnode.com
+rpc: https://rpc.starknet.lava.build
 database:
   backend: memory
 api:
   host: 0.0.0.0
   port: 8080
 indexer:
-  start_block: 0
   pending_blocks: true
   batch_size: 10
 contracts:
@@ -215,7 +214,7 @@ contracts:
 | `rpc` | The RPC endpoint URL. WSS endpoints enable real-time subscriptions; HTTP falls back to polling |
 | `database.backend` | Where to store indexed data. `memory` is ephemeral (lost on restart), `badger` persists to disk, `postgres` is production-grade |
 | `api` | The REST API server address. Default: `0.0.0.0:8080` |
-| `indexer.start_block` | Where to start indexing. `0` starts from block 0 (genesis). Omit this field to start from the latest block. Set a specific block number to backfill from that point |
+| `indexer.start_block` | Where to start indexing. Omitted by default (starts from the latest block). Set a specific block number to backfill from that point |
 | `indexer.pending_blocks` | Whether to index pending (unconfirmed) blocks for lower latency |
 | `indexer.batch_size` | How many blocks to fetch per batch during backfill |
 | `contracts` | The contracts to index -- name, address, ABI source, and event configuration |
@@ -233,7 +232,7 @@ You'll see startup output like this:
 ```
 Loaded config from ./ibis.config.yaml
   Network:  mainnet
-  RPC:      https://starknet-rpc.publicnode.com
+  RPC:      https://rpc.starknet.lava.build
   Backend:  memory
   API:      0.0.0.0:8080
   Contracts: 1
@@ -246,14 +245,15 @@ time=... level=INFO msg="created table" component=engine name=strk_approval type
 
 API server listening on 0.0.0.0:8080
 Starting indexer...
-time=... level=INFO msg="start block resolved" component=engine contract=STRK source=config value=0
-time=... level=INFO msg="contract start block" component=engine contract=STRK start_block=0
+time=... level=INFO msg="start block resolved" component=engine contract=STRK source=chain_tip value=...
+time=... level=INFO msg="contract start block" component=engine contract=STRK start_block=...
 time=... level=INFO msg="API server starting" component=api addr=0.0.0.0:8080
 time=... level=WARN msg="WSS dial failed, retrying" error=... backoff=1s attempt=1  # may appear once or twice — normal
-time=... level=INFO msg="WSS subscription active" component=subscriber contract=0x4718f...938d from_block=0
+time=... level=INFO msg="WSS subscription failed, falling back to polling" ...
+time=... level=INFO msg="starting polling fallback" component=subscriber contract=0x4718f...938d from_block=...
 ```
 
-> **Note**: You will likely see these WARN lines — they are shown in the output above and are safe to ignore. The `"RPC spec version mismatch"` warning means the node reports a different Starknet spec version than the client expects, but the provider still works. If your RPC endpoint doesn't support WebSocket, you'll see `"WSS subscription failed, falling back to polling"` followed by `"starting polling fallback"` — polling works the same way.
+> **Note**: You will likely see these WARN lines — they are shown in the output above and are safe to ignore. The `"RPC spec version mismatch"` warning means the node reports a different Starknet spec version than the client expects, but the provider still works. Most free RPC endpoints don't support WebSocket subscriptions, so you'll see `"WSS subscription failed, falling back to polling"` followed by `"starting polling fallback"` — polling works the same way, just with slightly higher latency.
 
 Here's what Ibis is doing:
 
@@ -569,8 +569,13 @@ Error: creating provider: dial tcp: lookup free-rpc.nethermind.io: no such host
 
 **Fix**: Try a different RPC provider. Update the `rpc` field in `ibis.config.yaml` or pass `--rpc` to `ibis init`. Free alternatives:
 
-- `https://starknet.drpc.org` (dRPC)
-- `https://rpc.starknet.lava.build` (Lava)
+| Provider | URL | HTTP polling | WSS subscriptions |
+|----------|-----|:---:|:---:|
+| Lava (default) | `https://rpc.starknet.lava.build` | Yes | No |
+| Alchemy | `wss://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_8/...` | Yes | Yes |
+| dRPC | `https://starknet.drpc.org` | Limited | No |
+
+> **Tip**: For real-time event delivery via `starknet_subscribeEvents`, use an [Alchemy](https://www.alchemy.com/starknet) WSS endpoint. Most free HTTP endpoints only support polling, which works the same way but with slightly higher latency.
 
 See [Starknet RPC providers](https://www.starknet.io/fullnodes-rpc-services/) for more options.
 
@@ -587,7 +592,7 @@ time=... level=INFO msg="starting polling fallback" component=subscriber contrac
 
 **Behavior**: Ibis retries dropped sessions with exponential backoff. After 5 consecutive session failures without processing any events, it automatically falls back to HTTP polling — which works the same way, just with slightly higher latency.
 
-**Fix**: If you see frequent reconnects, try a different RPC provider (see the alternatives listed in [RPC connection failures](#rpc-connection-failures) above) or use a provider that offers a dedicated WSS endpoint.
+**Fix**: If you see frequent reconnects, switch to a provider with dedicated WSS support such as [Alchemy](https://www.alchemy.com/starknet) (see the [RPC connection failures](#rpc-connection-failures) table above). Most free HTTP-only endpoints don't support WebSocket at all — Ibis will automatically fall back to HTTP polling, which works the same way.
 
 ### ABI fetch errors
 
@@ -599,7 +604,7 @@ Error: engine setup: fetching ABI for STRK: ...
 
 **Fix**:
 - Verify the contract address is correct
-- Check that the RPC endpoint is accessible: `curl https://starknet-rpc.publicnode.com -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"starknet_chainId","id":1}'`
+- Check that the RPC endpoint is accessible: `curl https://rpc.starknet.lava.build -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"starknet_chainId","id":1}'`
 - If the contract ABI isn't available on-chain, provide a local ABI file: `abi: ./path/to/abi.json`
 
 ### Port conflicts
@@ -625,9 +630,9 @@ lsof -i :8080
 
 ### No data appearing
 
-**Cause**: If `start_block` is `0`, Ibis begins from block 0 (genesis) and backfills the entire chain. On mainnet with a public RPC, this can be very slow or overwhelm the endpoint. If `start_block` is omitted, Ibis starts from the latest block and only indexes new events going forward — so tables will be empty until new events arrive.
+**Cause**: By default (when `start_block` is omitted), Ibis starts from the chain tip and only indexes new events going forward — so tables will be empty until new on-chain events arrive. With the STRK token, Transfer events happen every few blocks, so you should see data within 1–2 minutes. If `start_block` is set to `0`, Ibis begins from genesis and backfills the entire chain, which can be very slow on mainnet with a public RPC.
 
-**Fix**: Set `indexer.start_block` to a recent block number to backfill a manageable range of historical events:
+**Fix**: Wait 1–2 minutes for new on-chain events to arrive. If you want historical data, set `indexer.start_block` to a recent block number:
 
 ```yaml
 indexer:
