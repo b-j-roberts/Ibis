@@ -66,16 +66,26 @@ ibis --help
 You should see:
 
 ```
-A fast, easy-to-use Starknet event indexer
+Ibis indexes events from Starknet smart contracts using only an RPC
+connection, generates typed database tables and REST APIs from contract
+ABIs, and launches with a single command from a YAML config file.
 
 Usage:
   ibis [command]
 
 Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
   init        Scaffold an ibis.config.yaml from contract inspection
   query       Query indexed data from the terminal
   run         Start the indexer with the given config
-  ...
+
+Flags:
+      --config string   path to ibis config file (default "./ibis.config.yaml")
+  -h, --help            help for ibis
+  -v, --version         version for ibis
+
+Use "ibis [command] --help" for more information about a command.
 ```
 
 ---
@@ -98,6 +108,8 @@ What each flag does:
 - `--network mainnet` -- connect to Starknet mainnet (sets a default public RPC)
 - `--database memory` -- store data in memory (no setup required, perfect for trying things out)
 
+> **Note**: If your terminal doesn't support interactive prompts (CI pipelines, Docker containers, scripts, or AI coding assistants), skip to the [non-interactive command](#non-interactive) below.
+
 Ibis enters interactive mode. It will:
 
 1. **Prompt for an RPC endpoint** -- press Enter to accept the default (`https://starknet-rpc.publicnode.com`)
@@ -114,9 +126,11 @@ RPC endpoint URL: <press Enter>
 
 Name for contract 0x04718f...938d: STRK
 Fetching ABI for 0x04718f...938d from chain...
-  Found 2 events:
-    - Transfer (keys: from, to; data: value)
-    - Approval (keys: owner, spender; data: value)
+  Found 13 events:
+    - Transfer (data: from, to, value)
+    - Approval (data: owner, spender, value)
+    - ImplementationAdded (data: implementation_data)
+    ... and 10 more
 
 Index all events with wildcard (*)? [Y/n]: Y
 Customize table type for specific events? [y/N]: N
@@ -125,7 +139,11 @@ Config written to ./ibis.config.yaml
 Run `ibis run --config ./ibis.config.yaml` to start indexing.
 ```
 
-> **Tip: Agent skills** -- If you use [Claude Code](https://claude.com/claude-code) or another AI coding assistant, the `ibis-config` skill can generate configs from natural language. For example: *"index all Transfer events from the STRK token"*. Install with `npx skills add b-j-roberts/ibis --skill ibis-config`. See the [Agent Skills Guide](AGENT-SKILLS.md) for details.
+> **Note**: The `keys`/`data` split shown for each event depends on the contract's ABI. Cairo 1 contracts typically place all fields in `data`, while older Cairo 0 contracts may use `keys` for indexed fields.
+
+> **Tip: Agent skills** -- If you use an AI coding assistant that supports agent skills (e.g. [Claude Code](https://claude.com/claude-code)), the `ibis-config` skill can generate configs from natural language. For example: *"index all Transfer events from the STRK token"*. Install with `npx skills add b-j-roberts/ibis --skill ibis-config`. See the [Agent Skills Guide](AGENT-SKILLS.md) for details. This is entirely optional — skipping it has no effect on the rest of the guide.
+
+<a id="non-interactive"></a>
 
 For scripting or CI, add `--non-interactive` to skip all prompts. Use `--name` to set the contract's query identifier (used in `ibis query <name> <event>` and REST API paths like `/v1/<name>/<event>`):
 
@@ -200,10 +218,17 @@ Loaded config from ./ibis.config.yaml
   API:      0.0.0.0:8080
   Contracts: 1
     - STRK (0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d): 1 events
+time=... level=INFO msg="created table" component=engine name=strk_transfer type=log columns=10
+time=... level=INFO msg="created table" component=engine name=strk_approval type=log columns=10
+... (one line per event table)
 
 API server listening on 0.0.0.0:8080
 Starting indexer...
+time=... level=INFO msg="contract start block" component=engine contract=STRK start_block=0
+time=... level=INFO msg="WSS subscription active" component=subscriber contract=0x04718f...938d from_block=0
 ```
+
+> **Note**: You'll see structured log lines for each table created and the WebSocket subscription being established — this is normal. You may also see a `level=WARN msg="RPC spec version mismatch"` warning — this is safe to ignore. If your RPC endpoint doesn't support WebSocket, you'll see `"WSS subscription failed, falling back to polling"` followed by `"starting polling fallback"` — polling works the same way.
 
 Here's what Ibis is doing:
 
@@ -221,11 +246,139 @@ Leave this running in your terminal. Open a new terminal for the next steps.
 
 ## Querying Data
 
-Once the indexer is running, data flows in continuously. You can query it via the CLI or REST API.
+Once the indexer is running, data flows in continuously. You can query it via the REST API, SSE streaming, or the CLI.
+
+### REST API queries
+
+The running API server provides query capabilities over HTTP. Endpoints are auto-generated from your contract and event names:
+
+```
+GET /v1/{contract}/{event}
+```
+
+**Fetch recent Transfers with pagination:**
+
+```bash
+curl "http://localhost:8080/v1/STRK/Transfer?limit=5&order=block_number.desc"
+```
+
+```json
+{
+  "data": [
+    {
+      "block_number": 950124,
+      "log_index": 2,
+      "transaction_hash": "0x0ab3f...",
+      "timestamp": 1713100000,
+      "contract_address": "0x04718f...",
+      "contract_name": "STRK",
+      "event_name": "Transfer",
+      "status": "ACCEPTED_ON_L2",
+      "from": "0x0123...",
+      "to": "0x0456...",
+      "value": "750000000000000000"
+    },
+    ...
+  ],
+  "count": 5,
+  "limit": 5,
+  "offset": 0
+}
+```
+
+> **Note**: Every event includes metadata fields (`block_number`, `log_index`, `transaction_hash`, `timestamp`, `contract_address`, `contract_name`, `event_name`, `status`) alongside the event-specific fields defined in the contract ABI.
+
+**Filter by block range:**
+
+```bash
+curl "http://localhost:8080/v1/STRK/Transfer?block_number=gte.950000&limit=10"
+```
+
+**Get the latest event:**
+
+```bash
+curl "http://localhost:8080/v1/STRK/Transfer/latest"
+```
+
+```json
+{
+  "data": {
+    "block_number": 950124,
+    "log_index": 2,
+    "transaction_hash": "0x0ab3f...",
+    "timestamp": 1713100000,
+    "contract_address": "0x04718f...",
+    "contract_name": "STRK",
+    "event_name": "Transfer",
+    "status": "ACCEPTED_ON_L2",
+    "from": "0x0123...",
+    "to": "0x0456...",
+    "value": "750000000000000000"
+  }
+}
+```
+
+**Count events:**
+
+```bash
+curl "http://localhost:8080/v1/STRK/Transfer/count"
+```
+
+```json
+{
+  "count": 47
+}
+```
+
+**Check indexer status:**
+
+```bash
+curl "http://localhost:8080/v1/status"
+```
+
+```json
+{
+  "current_block": 950124,
+  "contracts": [
+    {
+      "name": "STRK",
+      "address": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+      "events": 1,
+      "current_block": 950124
+    }
+  ]
+}
+```
+
+This returns the current block height and the contracts being indexed (with each contract's name, address, event count, and per-contract block cursor).
+
+The REST API supports the same filter operators as the CLI (see table below). Pass filters as query parameters: `?field=operator.value`.
+
+### SSE streaming (real-time)
+
+Ibis supports Server-Sent Events for real-time streaming. Open a connection and new events are pushed as they arrive on-chain:
+
+```bash
+curl -N "http://localhost:8080/v1/STRK/Transfer/stream"
+```
+
+```
+id: 950124:2
+data: {"block_number":950124,"log_index":2,"transaction_hash":"0x0ab3...","timestamp":1713100000,"contract_address":"0x04718f...","contract_name":"STRK","event_name":"Transfer","status":"ACCEPTED_ON_L2","from":"0x0123...","to":"0x0456...","value":"750000000000000000"}
+
+id: 950125:0
+data: {"block_number":950125,"log_index":0,"transaction_hash":"0x0cd4...","timestamp":1713100060,"contract_address":"0x04718f...","contract_name":"STRK","event_name":"Transfer","status":"ACCEPTED_ON_L2","from":"0x0789...","to":"0x0abc...","value":"100000000000000000"}
+```
+
+Press `Ctrl+C` to stop streaming. The `-N` flag disables curl's output buffering so events appear immediately.
+
+> **Note**: The `id` field (`block_number:log_index`) is a standard SSE event ID. To resume a stream after disconnection, pass it via the `Last-Event-ID` header — Ibis will replay any events you missed: `curl -N -H "Last-Event-ID: 950124:2" "http://localhost:8080/v1/STRK/Transfer/stream"`
 
 ### CLI queries
 
-The `ibis query` command reads directly from the database. Basic syntax: `ibis query <contract> <event>`.
+> **Important**: The `ibis query` command reads directly from the database by opening its own connection. With the `memory` backend, this creates a **separate, empty** in-memory store — it cannot see data from the running `ibis run` process. CLI queries only work with persistent backends (`badger` or `postgres`). If you're using `memory` (as in this guide), use the REST API or SSE streaming above to query data.
+
+The `ibis query` command is useful when you have a persistent backend configured. Basic syntax: `ibis query <contract> <event>`.
 
 **List available tables:**
 
@@ -264,15 +417,22 @@ ibis query STRK Transfer --latest
 ```json
 [
   {
-    "block_number": 950123,
-    "log_index": 3,
-    "transaction_hash": "0x07a8f...",
+    "block_number": 950124,
+    "log_index": 2,
+    "transaction_hash": "0x0ab3f...",
+    "timestamp": 1713100000,
+    "contract_address": "0x04718f...",
+    "contract_name": "STRK",
+    "event_name": "Transfer",
+    "status": "ACCEPTED_ON_L2",
     "from": "0x0123...",
     "to": "0x0456...",
-    "value": "1000000000000000000"
+    "value": "750000000000000000"
   }
 ]
 ```
+
+> **Note**: The CLI `--latest` returns a JSON array, while the REST `/latest` endpoint wraps the event in `{"data": {...}}`.
 
 **Count total Transfer events:**
 
@@ -280,9 +440,13 @@ ibis query STRK Transfer --latest
 ibis query STRK Transfer --count
 ```
 
+```json
+{
+  "count": 47
+}
 ```
-Count: 47
-```
+
+> **Tip**: Use `--format table` for human-friendly output: `Count: 47`.
 
 **Filter by sender address:**
 
@@ -311,69 +475,6 @@ ibis query STRK Transfer \
   --order block_number.asc \
   --format table
 ```
-
-### REST API queries
-
-The running API server provides the same query capabilities over HTTP. Endpoints are auto-generated from your contract and event names:
-
-```
-GET /v1/{contract}/{event}
-```
-
-**Fetch recent Transfers with pagination:**
-
-```bash
-curl "http://localhost:8080/v1/STRK/Transfer?limit=5&order=block_number.desc"
-```
-
-```json
-{
-  "data": [...],
-  "count": 5
-}
-```
-
-**Filter by block range:**
-
-```bash
-curl "http://localhost:8080/v1/STRK/Transfer?block_number=gte.950000&limit=10"
-```
-
-**Get the latest event:**
-
-```bash
-curl "http://localhost:8080/v1/STRK/Transfer/latest"
-```
-
-**Count events:**
-
-```bash
-curl "http://localhost:8080/v1/STRK/Transfer/count"
-```
-
-**Check indexer status:**
-
-```bash
-curl "http://localhost:8080/v1/status"
-```
-
-This returns the current block height, contracts being indexed, and sync progress.
-
-### SSE streaming (real-time)
-
-Ibis supports Server-Sent Events for real-time streaming. Open a connection and new events are pushed as they arrive on-chain:
-
-```bash
-curl -N "http://localhost:8080/v1/STRK/Transfer/stream"
-```
-
-```
-data: {"block_number":950124,"log_index":2,"transaction_hash":"0x0ab3...","from":"0x0123...","to":"0x0456...","value":"750000000000000000"}
-
-data: {"block_number":950125,"log_index":0,"transaction_hash":"0x0cd4...","from":"0x0789...","to":"0x0abc...","value":"100000000000000000"}
-```
-
-Press `Ctrl+C` to stop streaming. The `-N` flag disables curl's output buffering so events appear immediately.
 
 ---
 
@@ -463,3 +564,7 @@ Restart the indexer and Ibis will fetch events from that block forward.
 ### Memory database and restarts
 
 The `memory` backend does not persist data. When you stop the indexer (`Ctrl+C`), all indexed data is lost. This is by design for quick experimentation. For persistence, switch to `badger` (embedded, writes to disk) or `postgres`.
+
+### CLI queries return no results
+
+If `ibis query` returns "No results found" while the REST API shows data, you're likely using the `memory` backend. The CLI opens its own database connection, which creates a separate empty in-memory store. Use the REST API (`curl http://localhost:8080/v1/...`) to query data with the memory backend, or switch to `badger` or `postgres` for CLI query support.

@@ -664,3 +664,31 @@
 - Hot-reload plugin updates without indexer restart
 
 **Rationale**: Every indexing use case has unique requirements beyond what a config file can express. A plugin system lets power users extend Ibis without forking, while keeping the core simple for the majority of users.
+
+### 4.7 Add REST API Proxy to `ibis query` for Memory Backend
+
+**Description**: The `ibis query` CLI command opens its own database connection via `openStore(cfg)`. With the `memory` backend, this creates a separate empty in-memory store that cannot see data from the running `ibis run` process — making all CLI queries return zero results. This task adds automatic REST API proxying: when the configured backend is `memory`, `ibis query` forwards the query to the running API server instead of opening a local store, giving users a seamless CLI experience regardless of backend.
+
+**Requirements**:
+- [ ] Detect `memory` backend in `runQuery()` by checking `cfg.Database.Backend == "memory"`
+- [ ] When memory backend is detected, probe the API server via `GET /v1/health` on the configured `api.host:api.port`
+- [ ] If the health check succeeds, proxy the query through the REST API instead of opening a store
+- [ ] Map CLI flags to REST API query parameters: `--limit` → `?limit=`, `--offset` → `?offset=`, `--order` → `?order=`, `--filter` → `?field=op.value`
+- [ ] Handle `--latest` by calling `/v1/{contract}/{event}/latest`
+- [ ] Handle `--count` by calling `/v1/{contract}/{event}/count`
+- [ ] Handle `--unique` by calling `/v1/{contract}/{event}/unique`
+- [ ] Handle `--aggregate` by calling `/v1/{contract}/{event}/aggregate`
+- [ ] Handle `--children` and `--children-count` by calling `/v1/{factory}/children` and `/v1/{factory}/children/count`
+- [ ] Format proxied responses using the same `--format` flag (json/table/csv) as direct store queries
+- [ ] If the health check fails (API not running), return a clear error: `"memory backend requires a running ibis instance — start 'ibis run' first, or switch to badger/postgres for offline CLI queries"`
+- [ ] Add `--api` flag as an explicit override to force REST proxy mode regardless of backend
+- [ ] Add tests for the proxy path using `httptest.Server` to mock the API
+
+**Implementation Notes**:
+- The proxy logic should live in a new `proxyQuery()` function in `internal/cli/query.go` called from `runQuery()` when memory backend is detected or `--api` flag is set
+- Build the target URL from `cfg.API.Host` and `cfg.API.Port` (default `0.0.0.0:8080`); when host is `0.0.0.0`, use `localhost` for the HTTP client
+- Use `net/http` client (stdlib) — no external dependency needed
+- Parse the JSON response from the API, then feed the decoded events into the existing `outputEvents()` / `outputCount()` / `outputAggregation()` formatters so all `--format` options work unchanged
+- The REST API response structs (`listResponse`, `latestResponse`) are defined in `internal/api/handlers.go:12-17` — the proxy needs to decode these envelopes to extract the inner data
+- `--list` already works without a store (reads from config), so no proxy needed there
+- The `--api` flag enables using the proxy with any backend, useful for querying a remote ibis instance
