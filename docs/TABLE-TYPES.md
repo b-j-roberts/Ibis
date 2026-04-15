@@ -46,6 +46,8 @@ Log tables are **append-only**: every event becomes a new row. Nothing is overwr
 
 ### Configuration
 
+> **Note:** The examples below show only the event configuration. For a complete config file including `network`, `rpc`, and `database` settings, see the [Configuration Reference](CONFIGURATION.md) or run `ibis init`.
+
 ```yaml
 contracts:
   - name: STRK
@@ -87,6 +89,8 @@ ibis query STRK Transfer --filter "from=eq.0x123..."
 ibis query STRK Transfer --count
 ```
 
+> **Note:** When using the BadgerDB backend, CLI queries require the indexer to be stopped (BadgerDB does not support concurrent access). Use the REST API for queries while the indexer is running, or use the PostgreSQL backend for concurrent CLI and indexer usage.
+
 ### What Gets Stored
 
 Every event row includes system columns plus decoded event fields:
@@ -98,8 +102,9 @@ Every event row includes system columns plus decoded event fields:
 | `log_index` | Position within the block's event log |
 | `timestamp` | Block timestamp |
 | `contract_address` | Contract that emitted the event |
+| `contract_name` | Name of the contract as configured in ibis.config.yaml |
 | `event_name` | Name of the event |
-| `status` | `accepted` or `pending` |
+| `status` | `ACCEPTED_ON_L2` or `PENDING` |
 | *...event fields* | Decoded fields from the ABI (e.g., `from`, `to`, `value`) |
 
 ---
@@ -155,7 +160,7 @@ ibis query GameLeaderboard ScoreUpdate --unique
 ibis query GameLeaderboard ScoreUpdate --unique --filter "player_address=eq.0x456..."
 ```
 
-> **Note:** The underlying log of all events is still stored. The `/unique` endpoint provides the deduplicated view, while the base endpoint (`/v1/GameLeaderboard/ScoreUpdate`) still returns the full event history.
+> **Note:** In BadgerDB and in-memory backends, the underlying log of all events is still stored — the `/unique` endpoint provides the deduplicated view, while the base endpoint (`/v1/GameLeaderboard/ScoreUpdate`) returns the full event history. In PostgreSQL, unique tables use upserts (`ON CONFLICT ... DO UPDATE`), so only the latest row per key is retained in the database.
 
 ### How It Works
 
@@ -163,7 +168,7 @@ When a `ScoreUpdate` event arrives with `player_address = 0xABC`:
 
 1. The event is appended to the log (like a log table)
 2. The unique index for key `0xABC` is updated to point to this new event
-3. Querying `/latest` returns only the most recent event per `player_address`
+3. Querying `/unique` returns only the most recent event per `player_address`
 
 The result: one row per player, always reflecting their latest score.
 
@@ -222,12 +227,12 @@ You can define multiple aggregates on the same event, even using different sourc
 
 ### Querying
 
-Aggregation tables have a dedicated `/agg` endpoint:
+Aggregation tables have a dedicated `/aggregate` endpoint:
 
 **REST API:**
 
 ```bash
-curl "http://localhost:8080/v1/MyDEX/Swap/agg"
+curl "http://localhost:8080/v1/MyDEX/Swap/aggregate"
 ```
 
 ```json
@@ -258,7 +263,7 @@ Suppose three `Swap` events arrive with `amount` values of `100`, `250`, and `15
 
 Each event updates the aggregates incrementally — ibis doesn't re-scan the entire table, it applies deltas.
 
-> **Note:** The underlying events are still stored in the log. The `/agg` endpoint returns the pre-computed aggregates, while the base endpoint still returns individual events.
+> **Note:** The underlying events are still stored in the log. The `/aggregate` endpoint returns the pre-computed aggregates, while the base endpoint still returns individual events.
 
 ---
 
@@ -382,15 +387,15 @@ CREATE TABLE IF NOT EXISTS strk_transfer (
 );
 ```
 
-**Unique tables** add a unique index on the key column. New events upsert (insert or update on conflict):
+**Unique tables** add a unique index on the key column. New events upsert (insert or update on conflict), meaning only the latest row per key is retained in the database:
 
 ```sql
 -- Table structure is the same as log
-CREATE UNIQUE INDEX idx_leaderboard_scoreupdate_unique_player_address
-    ON leaderboard_scoreupdate (player_address);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gameleaderboard_scoreupdate_unique_player_address
+    ON gameleaderboard_scoreupdate (player_address);
 
 -- Inserts use ON CONFLICT ... DO UPDATE
-INSERT INTO leaderboard_scoreupdate (...) VALUES (...)
+INSERT INTO gameleaderboard_scoreupdate (...) VALUES (...)
 ON CONFLICT (player_address) DO UPDATE SET ...;
 ```
 
@@ -411,7 +416,7 @@ CREATE TABLE IF NOT EXISTS mydex_swap (...);
 CREATE TABLE IF NOT EXISTS mydex_swap_agg (
     id SERIAL PRIMARY KEY,
     total_volume DOUBLE PRECISION DEFAULT 0,
-    swap_count DOUBLE PRECISION DEFAULT 0,
+    swap_count BIGINT DEFAULT 0,
     avg_swap_size DOUBLE PRECISION DEFAULT 0,
     avg_swap_size__sum DOUBLE PRECISION DEFAULT 0,   -- internal
     avg_swap_size__count DOUBLE PRECISION DEFAULT 0  -- internal
@@ -447,7 +452,7 @@ Data is lost on restart — use this backend for development and testing only.
 
 ## View Function Tables
 
-[View function polling](ADVANCED-FEATURES.md) periodically calls read-only contract functions and indexes the results. View tables support **log** and **unique** types only — aggregation is not available for views.
+[View function polling](ADVANCED-FEATURES.md) periodically calls read-only contract functions (functions that don't modify state) and indexes the results. See [Advanced Features](ADVANCED-FEATURES.md) for setup details. View tables support **log** and **unique** types only — aggregation is not available for views.
 
 ### View as Log
 

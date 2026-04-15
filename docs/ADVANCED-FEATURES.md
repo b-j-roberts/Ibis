@@ -2,6 +2,8 @@
 
 Ibis goes beyond simple event indexing. This guide covers the features that let you index entire ecosystems of contracts -- factory-deployed children, class-hash-discovered deployments, shared tables for scale, dynamic runtime management, and periodic view function polling.
 
+> **Prerequisites:** This guide assumes you have ibis installed and a basic configuration working. If you're new to ibis, start with the [Getting Started](GETTING-STARTED.md) guide. For config file structure and field reference, see [Configuration](CONFIGURATION.md). For table type definitions (`log`, `unique`, `aggregation`), see [Table Types](TABLE-TYPES.md).
+
 ---
 
 ## Factory Contracts
@@ -43,7 +45,7 @@ contracts:
 |-------|-------------|
 | `event` | The factory event that signals a new child deployment (e.g., `PairCreated`) |
 | `child_address_field` | The field in that event containing the deployed child's address |
-| `child_abi` | ABI source for child contracts: `fetch` (from chain), a file path, or a contract name for smart discovery |
+| `child_abi` | ABI source for child contracts: `fetch` (resolves the ABI from the contract's class hash on-chain via your configured RPC endpoint), a local file path, or a Cairo contract name (searches Scarb build artifacts in `target/dev/`) |
 | `child_events` | Event/table configuration template applied to every child |
 
 When Ibis processes a `PairCreated` event, it:
@@ -52,7 +54,7 @@ When Ibis processes a `PairCreated` event, it:
 2. Fetches the child's ABI (and caches it -- all children share the same class hash)
 3. Creates tables for `Swap`, `Mint`, and `Burn`
 4. Subscribes to the child's events in real time
-5. Collects non-system fields from the factory event as metadata (e.g., `token0`, `token1`)
+5. Collects event-specific fields (all fields except `block_number`, `log_index`, `timestamp`, `event_name`, `contract_address`, `contract_name`, `transaction_hash`, and `status`) from the factory event as metadata (e.g., `token0`, `token1`)
 
 ### Child Naming
 
@@ -104,7 +106,7 @@ curl "http://localhost:8080/v1/JediSwapFactory/children"
 }
 ```
 
-Factory event metadata (like `token0` and `token1`) is promoted to top-level fields and can be used for filtering:
+Factory event metadata (like `token0` and `token1`) appears as top-level fields in the API response and can be used for filtering:
 
 ```bash
 # Find the pair for a specific token
@@ -158,7 +160,7 @@ contracts:
 ```
 
 With `shared_tables: true`:
-- Table names use the factory name: `jediswapfactory_swap`, `jediswapfactory_burn`
+- Table names are the factory name + event name, lowercased: `jediswapfactory_swap`, `jediswapfactory_burn` (from `JediSwapFactory` + `Swap`/`Burn`)
 - A `contract_address` column identifies which child each row belongs to
 - A `contract_name` column provides the human-readable child name
 - For `unique` tables, uniqueness is scoped per child: `(contract_address, unique_key)`
@@ -214,12 +216,14 @@ discover:
 | Field | Description |
 |-------|-------------|
 | `class_hash` | The class hash to watch for in UDC deploy events |
-| `abi` | ABI source. When `shared_tables: true`, must be a named value (not `fetch` or a file path) |
-| `events` | Event/table configuration applied to every discovered contract |
+| `abi` | ABI source: `fetch` (from chain), a file path, or a Cairo contract name (searches `target/dev/*_{name}.contract_class.json` from a Scarb build) |
+| `events` | Event/table configuration applied to every discovered contract. Use `name: "*"` to index all events from the ABI (see [Naming](#naming) below) |
 | `shared_tables` | Write all discovered contracts to the same tables (recommended) |
-| `group` | Optional namespace for organization |
+| `group` | Optional namespace for organizing discovered contracts in API responses and naming templates |
 | `name_template` | Custom naming template (default: `{class_hash_short}_{address_short}`) |
 | `views` | Optional view functions to poll for discovered contracts |
+
+> **Important:** When using `shared_tables: true` with discovery, the `abi` field must be a Cairo contract name -- not `fetch` or a file path. The contract name is used as the shared table prefix.
 
 When Ibis sees a UDC `ContractDeployed` event with a matching class hash, it:
 
@@ -250,6 +254,21 @@ discover:
           type: log
 ```
 
+The wildcard `name: "*"` indexes every event found in the contract's ABI using the specified table configuration. You can override specific events by listing them alongside the wildcard -- explicit entries take precedence:
+
+```yaml
+events:
+  - name: "*"
+    table:
+      type: log
+  - name: Transfer
+    table:
+      type: unique
+      unique_key: owner
+```
+
+In this example, `Transfer` uses a `unique` table while all other events default to `log`.
+
 Available variables: `{class_hash}`, `{class_hash_short}`, `{address}`, `{address_short}`, `{group}`
 
 ### UDC Configuration
@@ -277,6 +296,17 @@ indexer:
     address_key: 1       # index in keys[] for deployed address
     class_hash_data: 0   # index in data[] for class hash
 ```
+
+All four override fields:
+
+| Field | Description |
+|-------|-------------|
+| `address_key` | Index in `keys[]` for the deployed address |
+| `address_data` | Index in `data[]` for the deployed address |
+| `class_hash_key` | Index in `keys[]` for the class hash |
+| `class_hash_data` | Index in `data[]` for the class hash |
+
+`address_key` and `address_data` are mutually exclusive (the address is in either keys or data, not both). The same applies to `class_hash_key` and `class_hash_data`. These overrides are only valid with `version: auto` (the default).
 
 ### Discovery API
 
@@ -314,6 +344,8 @@ If an admin key is configured, all admin endpoints require the `X-Admin-Key` hea
 api:
   admin_key: "your_secret_key"
 ```
+
+If no `admin_key` is set, admin endpoints are accessible without authentication. This is fine for local development but should always be configured in production.
 
 ### Register a Contract
 
@@ -420,7 +452,9 @@ contracts:
 | `calldata` | Static arguments as hex felts (empty array `[]` for no arguments) |
 | `interval` | How often to poll (Go duration: `5s`, `1m`, `30s`) |
 | `table.type` | `log` for historical tracking, `unique` for latest-value-only |
-| `table.unique_key` | Required for `unique` tables. Use `_view_key` for a single-row table |
+| `table.unique_key` | Required for `unique` tables. Use `_view_key` for a single-row table (see below) |
+
+`_view_key` is a special sentinel value recognized by ibis. When used as `unique_key`, ibis maintains a single row that is overwritten on each poll -- effectively a "latest value" slot. With shared tables, the row is scoped per `contract_address`, so each contract gets its own latest value.
 
 ### How It Works
 
@@ -433,14 +467,14 @@ At each interval, Ibis:
 
 **Log tables** append every poll result, giving you a time series of the view function's return value. Use this for tracking how values change over time.
 
-**Unique tables** with `unique_key: _view_key` keep a single row that's overwritten on each poll -- always reflecting the latest value. Use this for dashboards showing current state.
+**Unique tables** with `unique_key: _view_key` keep a single row that's overwritten on each poll -- always reflecting the latest value. Use this for dashboards showing current state. (With shared tables, the row is scoped per `contract_address`, so each contract gets its own latest value.)
 
 ### Querying View Data
 
-View function results are queryable through the same REST API as events:
+View function results are queryable through the same REST API as events. The `/latest` suffix returns the single most recent row (see [API Reference](API-REFERENCE.md) for details):
 
 ```bash
-# Latest reserve data
+# Latest reserve data (returns the most recent poll result)
 curl "http://localhost:8080/v1/LendingPool/get_reserve_data/latest"
 
 # Historical reserve data (log table)
@@ -473,7 +507,7 @@ discover:
 
 ## End-to-End Example: DEX Factory
 
-Here's a complete configuration for indexing a JediSwap-style AMM factory with shared tables, child events, and view function polling:
+Here's a complete configuration for indexing a JediSwap-style AMM factory with shared tables and child events. Note that `${VAR}` syntax is expanded from environment variables at startup (see [Configuration](CONFIGURATION.md)):
 
 ```yaml
 network: mainnet
@@ -520,14 +554,6 @@ contracts:
           table:
             type: unique
             unique_key: _view_key
-      # Poll reserves for each pair
-    views:
-      - function: get_reserves
-        calldata: []
-        interval: 30s
-        table:
-          type: unique
-          unique_key: _view_key
 ```
 
 This configuration:
@@ -535,7 +561,8 @@ This configuration:
 1. **Indexes the factory** -- logs every `PairCreated` event
 2. **Auto-discovers pairs** -- when `PairCreated` fires, Ibis starts indexing the child
 3. **Uses shared tables** -- all pairs write to `jediswapfactory_swap` and `jediswapfactory_sync`
-4. **Polls reserves** -- calls `get_reserves()` every 30 seconds for each pair
+
+> **Important:** View function polling is not inherited by factory children. To poll views on dynamically discovered contracts, use [class hash discovery](#class-hash-discovery) with a `views` block (see [Views with Discovery](#views-with-discovery)).
 
 **Query all swaps across all pairs:**
 
@@ -590,11 +617,11 @@ If you use [Claude Code](https://claude.com/claude-code) or another AI coding as
 - **`ibis-config`** generates factory, discovery, and view function configs from natural language. Example: *"index all pairs from the JediSwap factory with shared tables and reserve polling"*.
 - **`ibis-admin`** manages a running indexer -- registering contracts, checking status, and listing children -- without writing curl commands.
 
-Install with:
+Install with the Claude Code Skills CLI (requires Node.js):
 
 ```bash
 npx skills add b-j-roberts/ibis --skill ibis-config
 npx skills add b-j-roberts/ibis --skill ibis-admin
 ```
 
-See the [Agent Skills Guide](AGENT-SKILLS.md) for details.
+See the [Agent Skills Guide](AGENT-SKILLS.md) for setup details and usage examples.

@@ -6,6 +6,7 @@ Ibis provides real-time event delivery via Server-Sent Events (SSE). As the inde
 
 ## Table of Contents
 
+- [Prerequisites](#prerequisites)
 - [Why SSE?](#why-sse)
 - [Endpoint](#endpoint)
 - [Event Format](#event-format)
@@ -17,6 +18,23 @@ Ibis provides real-time event delivery via Server-Sent Events (SSE). As the inde
   - [Go](#go)
 - [Factory Streaming](#factory-streaming)
 - [Best Practices](#best-practices)
+
+> **New to ibis?** This guide assumes you have a running ibis instance. If you haven't set up ibis yet, start with the [Getting Started](GETTING-STARTED.md) guide. For config file details, see [Configuration](CONFIGURATION.md).
+
+---
+
+## Prerequisites
+
+- A running ibis instance with at least one contract configured in your `ibis.config.yaml`
+- The examples below use a contract named `MyToken` with a `Transfer` event — replace these with your actual contract and event names
+
+Verify ibis is running before testing SSE:
+
+```bash
+curl http://localhost:8080/v1/health
+```
+
+You should see `{"status":"ok"}`. If you get `connection refused`, ibis is not running — see [Getting Started](GETTING-STARTED.md).
 
 ---
 
@@ -66,16 +84,18 @@ data: {json}
 - **`id`** — uniquely identifies the event by its position on-chain. Used for reconnection replay.
 - **`data`** — JSON-encoded object with all decoded event fields plus metadata.
 
-**Example output**:
+**Example output** (for an ERC-20 `Transfer` event):
 
 ```
 id: 850000:3
-data: {"block_number":850000,"log_index":3,"contract_address":"0x049d36...","from":"0x1234...","to":"0x5678...","amount":"1000000000000000000"}
+data: {"block_number":850000,"log_index":3,"contract_address":"0x049d36...","contract_name":"MyToken","event_name":"Transfer","status":"ACCEPTED_ON_L2","timestamp":1700000000,"transaction_hash":"0xabc123...","from":"0x1234...","to":"0x5678...","value":"1000000000000000000"}
 
 id: 850001:0
-data: {"block_number":850001,"log_index":0,"contract_address":"0x049d36...","from":"0x9999...","to":"0x1111...","amount":"500000000000000000"}
+data: {"block_number":850001,"log_index":0,"contract_address":"0x049d36...","contract_name":"MyToken","event_name":"Transfer","status":"ACCEPTED_ON_L2","timestamp":1700000060,"transaction_hash":"0xdef456...","from":"0x9999...","to":"0x1111...","value":"500000000000000000"}
 
 ```
+
+Every event includes these **metadata fields** added by ibis: `block_number`, `log_index`, `contract_address`, `contract_name`, `event_name`, `status`, `timestamp`, `transaction_hash`. The remaining fields (`from`, `to`, `value` above) come from the contract's ABI and vary by event type.
 
 > **Note**: Each event ends with two newlines (`\n\n`). This is part of the SSE protocol — it signals the end of an event.
 
@@ -123,12 +143,16 @@ The stream endpoint supports the same **Supabase-style filter operators** as the
 
 **Format**: `?field=operator.value`
 
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `eq` | Equals | `?from=eq.0x1234` |
-| `neq` | Not equals | `?status=neq.REVERTED` |
+| Operator | Description | Example | Live Stream | Replay / REST |
+|----------|-------------|---------|:-----------:|:-------------:|
+| `eq` | Equals | `?from=eq.0x1234` | Yes | Yes |
+| `neq` | Not equals | `?status=neq.REVERTED` | Yes | Yes |
+| `gt` | Greater than | `?amount=gt.1000` | No | Yes |
+| `gte` | Greater than or equal | `?block_number=gte.850000` | No | Yes |
+| `lt` | Less than | `?amount=lt.5000` | No | Yes |
+| `lte` | Less than or equal | `?block_number=lte.900000` | No | Yes |
 
-> **Note**: Only `eq` and `neq` operators are supported for live streaming filters. The full set of operators (`gt`, `gte`, `lt`, `lte`) is supported on replay queries and REST endpoints.
+> **Note**: Only `eq` and `neq` are evaluated on live streaming events. The range operators (`gt`, `gte`, `lt`, `lte`) are applied by the store on replay queries (via `Last-Event-ID`) and [REST API](API-REFERENCE.md) endpoints.
 
 **Shorthand**: If no operator prefix is given, `eq` is assumed. These are equivalent:
 
@@ -154,7 +178,7 @@ This streams only Transfer events where `from` is `0x1234` **and** `to` is `0x56
 The simplest way to test SSE streaming. Use the `-N` flag to disable output buffering:
 
 ```bash
-# Stream all Transfer events
+# Stream all Transfer events (live only — output appears as new blocks are indexed)
 curl -N "http://localhost:8080/v1/MyToken/Transfer/stream"
 
 # Stream with a filter
@@ -175,7 +199,7 @@ const source = new EventSource(url);
 
 source.onmessage = (event) => {
   const data = JSON.parse(event.data);
-  console.log(`Block ${data.block_number}: ${data.from} -> ${data.to} (${data.amount})`);
+  console.log(`Block ${data.block_number}: ${data.from} -> ${data.to} (${data.value})`);
 };
 
 source.onerror = (error) => {
@@ -222,7 +246,7 @@ function TransferFeed({ contract, event }) {
     <ul>
       {transfers.map((t) => (
         <li key={`${t.block_number}:${t.log_index}`}>
-          {t.from} → {t.to}: {t.amount}
+          {t.from} → {t.to}: {t.value}
         </li>
       ))}
     </ul>
@@ -232,9 +256,16 @@ function TransferFeed({ contract, event }) {
 
 > **Tip**: The `EventSource` API automatically sends `Last-Event-ID` on reconnection. If your ibis instance restarts, the browser will reconnect and receive all events it missed — no extra code needed.
 
+> **Note**: If your frontend is served from a different origin than ibis (e.g., `https://myapp.com` connecting to `http://localhost:8080`), the browser will block the request due to CORS. Configure a reverse proxy or serve your frontend from the same origin as ibis.
+
 ### Go
 
-For backend services consuming ibis events:
+For backend services consuming ibis events. Save the code below to `main.go`, then run:
+
+```bash
+go mod init sse-client
+go run main.go
+```
 
 ```go
 package main
@@ -285,7 +316,7 @@ func main() {
 			}
 
 			fmt.Printf("[%s] %v -> %v: %v\n",
-				lastID, event["from"], event["to"], event["amount"])
+				lastID, event["from"], event["to"], event["value"])
 		}
 	}
 

@@ -4,17 +4,50 @@ This guide covers deploying ibis in development, staging, and production environ
 
 ---
 
+## Prerequisites
+
+- **Go 1.25+** (for building from source)
+- **A Starknet RPC endpoint** (WSS or HTTP) — get one from [Alchemy](https://www.alchemy.com/starknet), [Infura](https://www.infura.io/), [Blast](https://blastapi.io/), or any Starknet RPC provider
+
+## Installation
+
+### From Source
+
+```bash
+git clone https://github.com/b-j-roberts/ibis.git
+cd ibis
+make build
+# binary is at ./bin/ibis — add to your PATH or use directly:
+./bin/ibis --version
+```
+
+### Docker
+
+If you prefer Docker, skip to the [Docker](#docker) or [Docker Compose](#docker-compose) sections — no local Go installation needed.
+
+---
+
 ## Development Setup
 
-For local development and testing, use the in-memory backend to avoid external dependencies:
+For local development and testing, use the in-memory backend to avoid external dependencies.
+
+First, set your RPC endpoint:
+
+```bash
+export IBIS_RPC_URL=wss://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_8/YOUR_KEY
+```
+
+> **Note:** ibis does not read `.env` files directly. For local development without Docker, export variables in your shell as shown above.
+
+Create an `ibis.config.yaml` in the project root (the directory where you'll run ibis):
 
 ```yaml
 # ibis.config.yaml
-network: mainnet
-rpc: ${IBIS_RPC_URL}
+network: mainnet                  # target network: "mainnet" or "sepolia"
+rpc: ${IBIS_RPC_URL}             # expanded from the env var you exported above
 
 database:
-  backend: memory
+  backend: memory                 # in-memory store — data is lost on restart
 
 api:
   host: 0.0.0.0
@@ -23,20 +56,23 @@ api:
 contracts:
   - name: MyContract
     address: "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
-    abi: fetch
+    abi: fetch                    # auto-fetch the ABI from the network
     events:
-      - name: "*"
+      - name: "*"                 # subscribe to all events from this contract
         table:
-          type: log
+          type: log               # append-only event log (see Table Types docs for "unique" and "aggregation")
 ```
 
 Then run:
 
 ```bash
-ibis run
-# or with make:
-make run
+ibis run                          # if ibis is on your PATH
+./bin/ibis run                    # from the ibis source directory
+# or:
+make run                          # builds and runs via the Makefile
 ```
+
+> **Note:** Without a `start_block` setting, ibis starts from the latest block — you'll only see new events going forward. To backfill historical data, add an `indexer.start_block` value (see [Start Block](#start-block)).
 
 The memory backend stores everything in-process — data is lost on restart. This is ideal for quick iteration and testing config changes.
 
@@ -97,7 +133,7 @@ database:
 
 ## Docker Compose
 
-The included `docker-compose.yaml` runs ibis with PostgreSQL:
+The `docker-compose.yaml` included in the ibis repository runs ibis with PostgreSQL:
 
 ```bash
 make docker-compose-up    # start ibis + postgres
@@ -111,7 +147,9 @@ make docker-compose-down  # stop all services
 | `ibis` | Built from `Dockerfile` | `8080` (configurable via `IBIS_API_PORT`) |
 | `postgres` | `postgres:17-alpine` | `5432` (configurable via `IBIS_DB_PORT`) |
 
-### docker-compose.yaml
+### docker-compose.yaml Reference
+
+The full compose file (included in the repo) for reference:
 
 ```yaml
 services:
@@ -165,7 +203,7 @@ volumes:
 
 ### Environment File
 
-Create a `.env` file (or copy from `.env.example`):
+Create a `.env` file (or copy from the `.env.example` included in the ibis repo):
 
 ```bash
 cp .env.example .env
@@ -347,15 +385,26 @@ ibis run
 GET /v1/health
 ```
 
-Returns `{"status": "ok"}` when the API server is running. Use this for load balancer health checks and container orchestration:
+Returns `{"status": "ok"}` when the API server is running. Use this for load balancer health checks and container orchestration.
+
+> **Note:** The ibis Docker image uses a distroless base (no shell, no `curl`/`wget`), so health checks must be performed from outside the container — for example, from your load balancer, monitoring stack, or a docker-compose sidecar.
+
+Example using `curl` from the host:
+
+```bash
+curl -sf http://localhost:8080/v1/health
+```
+
+For Kubernetes or external orchestrators, configure an HTTP health probe:
 
 ```yaml
-# docker-compose healthcheck for ibis
-healthcheck:
-  test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/v1/health"]
-  interval: 10s
-  timeout: 5s
-  retries: 3
+# Kubernetes liveness probe
+livenessProbe:
+  httpGet:
+    path: /v1/health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
 ```
 
 ### Sync Status
@@ -460,9 +509,9 @@ If the database is lost entirely, ibis can re-index from scratch. Set `start_blo
 
 ## Example: Minimal Production Setup
 
-1. **Create `.env`**:
+1. **Create `.env`** (replace the RPC URL with your provider — e.g., [Alchemy](https://www.alchemy.com/starknet), [Infura](https://www.infura.io/), [Blast](https://blastapi.io/)):
    ```env
-   IBIS_RPC_URL=wss://starknet-mainnet.your-provider.com
+   IBIS_RPC_URL=wss://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_8/YOUR_KEY
    IBIS_DB_PASSWORD=a-strong-random-password
    IBIS_ADMIN_KEY=your-admin-secret
    ```
