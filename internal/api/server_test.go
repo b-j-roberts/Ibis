@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/b-j-roberts/ibis/internal/api"
@@ -364,12 +365,93 @@ func TestNotFound(t *testing.T) {
 func TestFilterDefaultsToEq(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
-	// Filters without an operator prefix now default to "eq" instead of
-	// returning a 400 error. This enables simple filters like
-	// ?contract_address=0x123 for factory per-child queries.
-	status := getStatus(t, ts, "/v1/MyToken/Transfer?from=badformat")
+	// Values without a dot separator default to "eq".
+	// This enables simple filters like ?contract_address=0x123.
+	status := getStatus(t, ts, "/v1/MyToken/Transfer?from=0xalice")
 	if status != http.StatusOK {
 		t.Errorf("expected 200 for filter defaulting to eq, got %d", status)
+	}
+}
+
+func TestFilterInvalidOperatorReturns400(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// A dot-separated value with an unrecognized operator prefix returns 400.
+	status := getStatus(t, ts, "/v1/MyToken/Transfer?from=invalid.0x1234")
+	if status != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid filter operator, got %d", status)
+	}
+
+	// Verify the error message is descriptive.
+	resp, err := http.Get(ts.URL + "/v1/MyToken/Transfer?from=badop.somevalue")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	errMsg, ok := result["error"].(string)
+	if !ok || errMsg == "" {
+		t.Errorf("expected error message in response, got %v", result)
+	}
+}
+
+func TestUniqueEndpointRejectsNonUniqueTable(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// Transfer is a log table — /unique should return 400.
+	status := getStatus(t, ts, "/v1/MyToken/Transfer/unique")
+	if status != http.StatusBadRequest {
+		t.Errorf("expected 400 for /unique on log table, got %d", status)
+	}
+
+	result := getJSON(t, ts, "/v1/MyToken/Transfer/unique")
+	errMsg, ok := result["error"].(string)
+	if !ok || errMsg == "" {
+		t.Fatalf("expected error message, got %v", result)
+	}
+	if !strings.Contains(errMsg, "unique table types") || !strings.Contains(errMsg, "log table") {
+		t.Errorf("expected descriptive error mentioning table type, got %q", errMsg)
+	}
+}
+
+func TestAggregateEndpointRejectsNonAggregationTable(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// Transfer is a log table — /aggregate should return 400.
+	status := getStatus(t, ts, "/v1/MyToken/Transfer/aggregate")
+	if status != http.StatusBadRequest {
+		t.Errorf("expected 400 for /aggregate on log table, got %d", status)
+	}
+
+	result := getJSON(t, ts, "/v1/MyToken/Transfer/aggregate")
+	errMsg, ok := result["error"].(string)
+	if !ok || errMsg == "" {
+		t.Fatalf("expected error message, got %v", result)
+	}
+	if !strings.Contains(errMsg, "aggregation table types") || !strings.Contains(errMsg, "log table") {
+		t.Errorf("expected descriptive error mentioning table type, got %q", errMsg)
+	}
+}
+
+func TestUniqueEndpointRejectsAggregationTable(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// Volume is an aggregation table — /unique should return 400.
+	status := getStatus(t, ts, "/v1/MyToken/Volume/unique")
+	if status != http.StatusBadRequest {
+		t.Errorf("expected 400 for /unique on aggregation table, got %d", status)
+	}
+}
+
+func TestAggregateEndpointRejectsUniqueTable(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// Balance is a unique table — /aggregate should return 400.
+	status := getStatus(t, ts, "/v1/MyToken/Balance/aggregate")
+	if status != http.StatusBadRequest {
+		t.Errorf("expected 400 for /aggregate on unique table, got %d", status)
 	}
 }
 

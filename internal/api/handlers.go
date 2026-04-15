@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/b-j-roberts/ibis/internal/config"
@@ -115,6 +116,12 @@ func (s *Server) handleGetUnique(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if schema.TableType != types.TableTypeUnique {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("endpoint /unique is only available for unique table types; '%s' is a %s table", event, schema.TableType))
+		return
+	}
+
 	q, err := parseQuery(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -144,6 +151,12 @@ func (s *Server) handleGetAggregate(w http.ResponseWriter, r *http.Request) {
 	schema := s.lookupSchema(contract, event)
 	if schema == nil {
 		writeError(w, http.StatusNotFound, "table not found")
+		return
+	}
+
+	if schema.TableType != types.TableTypeAggregation {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("endpoint /aggregate is only available for aggregation table types; '%s' is a %s table", event, schema.TableType))
 		return
 	}
 

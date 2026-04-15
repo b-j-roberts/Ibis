@@ -2,9 +2,13 @@
 
 Complete reference for all REST API endpoints exposed by the ibis indexer.
 
-**Base URL**: `http://{host}:{port}/v1`
+**Base URL**: `http://localhost:8080/v1` (default; configurable via [`api.host`](CONFIGURATION.md#apihost) and [`api.port`](CONFIGURATION.md#apiport))
 **Content-Type**: All responses are `application/json` unless otherwise noted.
-**CORS**: Configurable via `api.cors_origins` in `ibis.config.yaml`. Defaults to `*`.
+**CORS**: Configurable via `api.cors_origins` in [`ibis.config.yaml`](CONFIGURATION.md#apicors_origins). Defaults to `*`.
+
+## Prerequisites
+
+Before using the API, ibis must be installed and running with the API server enabled. See the [Getting Started guide](GETTING-STARTED.md) for installation and setup instructions. The default API address is `http://localhost:8080` — configurable via [`api.host`](CONFIGURATION.md#apihost) (default: `0.0.0.0`) and [`api.port`](CONFIGURATION.md#apiport) (default: `8080`). All examples in this document use the default.
 
 ---
 
@@ -220,7 +224,7 @@ curl http://localhost:8080/v1/MyToken/Transfer/latest
 
 Returns the total count of events matching optional filters.
 
-**Query Parameters**: Supports [filter parameters](#filter-operators) only (not `limit`, `offset`, or `order`).
+**Query Parameters**: Supports [filter parameters](#filter-operators) only (not `limit`, `offset`, or `order`). If `limit`, `offset`, or `order` are passed, they are silently ignored.
 
 **Response** `200 OK`:
 
@@ -247,7 +251,9 @@ curl "http://localhost:8080/v1/MyToken/Transfer/count?block_number=gte.800000"
 
 ### `GET /v1/{contract}/{event}/unique`
 
-Returns the latest entry per unique key from a **unique** table type. Only available for events configured with `table_type: unique` in `ibis.config.yaml`.
+Returns the latest entry per unique key from a **unique** table type. Only available for events configured with [`table_type: unique`](CONFIGURATION.md#eventstabletype) in `ibis.config.yaml`.
+
+> **Note**: Calling `/unique` on a non-unique table (e.g., a `log` or `aggregation` table) returns `400 Bad Request` with a descriptive error message indicating the table's actual type.
 
 **Query Parameters**: Same as the [list endpoint](#get-v1contractevent).
 
@@ -276,6 +282,14 @@ Returns the latest entry per unique key from a **unique** table type. Only avail
 }
 ```
 
+**Response** `400 Bad Request` (table type mismatch):
+
+```json
+{
+  "error": "endpoint /unique is only available for unique table types; 'Transfer' is a log table"
+}
+```
+
 **Example**:
 
 ```bash
@@ -290,7 +304,9 @@ curl "http://localhost:8080/v1/MyToken/Balance/unique?account=eq.0x1234"
 
 ### `GET /v1/{contract}/{event}/aggregate`
 
-Returns computed aggregate values for an **aggregation** table type. Only available for events configured with `table_type: aggregation` in `ibis.config.yaml`.
+Returns computed aggregate values for an **aggregation** table type. Only available for events configured with [`table_type: aggregation`](CONFIGURATION.md#eventstabletype) in `ibis.config.yaml`.
+
+> **Note**: Calling `/aggregate` on a non-aggregation table (e.g., a `log` or `unique` table) returns `400 Bad Request` with a descriptive error message indicating the table's actual type.
 
 **Response** `200 OK`:
 
@@ -304,6 +320,14 @@ Returns computed aggregate values for an **aggregation** table type. Only availa
 ```
 
 The keys in `data` correspond to the `column` names defined in the `aggregates` config. Available aggregate operations are `sum`, `count`, and `avg`.
+
+**Response** `400 Bad Request` (table type mismatch):
+
+```json
+{
+  "error": "endpoint /aggregate is only available for aggregation table types; 'Transfer' is a log table"
+}
+```
 
 **Example**:
 
@@ -319,9 +343,18 @@ Factory endpoints operate on contracts configured with a `factory` block in `ibi
 
 ### `GET /v1/{factory}/children`
 
-Lists all discovered child contracts for a factory, including metadata from the factory event.
+Lists all discovered child contracts for a factory, including metadata from the factory event. Supports pagination, sorting, and filtering.
 
-**Query Parameters**: Supports [filter operators](#filter-operators) on any metadata field (e.g., `?token0=eq.0x...`). Does not support `limit`, `offset`, or `order`.
+**Query Parameters**:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `limit` | `50` | Maximum number of results per page (max: 500) |
+| `offset` | `0` | Number of results to skip |
+| `order` | `deployment_block.desc` | Sort field and direction (`field.asc` or `field.desc`) |
+| `{field}` | — | [Filter operators](#filter-operators) on any metadata field (e.g., `?token0=eq.0x...`) |
+
+**Sortable fields**: `name`, `deployment_block`, `current_block`, `status`, `events`, and any promoted metadata field.
 
 **Response** `200 OK`:
 
@@ -339,28 +372,44 @@ Lists all discovered child contracts for a factory, including metadata from the 
       "token1": "0xdef..."
     }
   ],
-  "count": 1
+  "count": 1,
+  "total": 142,
+  "limit": 50,
+  "offset": 0
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `string` | Child contract name (auto-generated) |
-| `address` | `string` | Child contract address |
-| `deployment_block` | `number` | Block where the factory event was emitted |
-| `current_block` | `number` | Last processed block for this child |
-| `status` | `string` | Sync status |
-| `events` | `number` | Number of event types being indexed |
-| `{metadata}` | `any` | Additional fields from the factory event (promoted to top-level) |
+| `data[].name` | `string` | Child contract name (auto-generated) |
+| `data[].address` | `string` | Child contract address |
+| `data[].deployment_block` | `number` | Block where the factory event was emitted |
+| `data[].current_block` | `number` | Last processed block for this child |
+| `data[].status` | `string` | Sync status |
+| `data[].events` | `number` | Number of event types being indexed |
+| `data[].{metadata}` | `any` | Additional fields from the factory event (promoted to top-level) |
+| `count` | `number` | Number of results in the current page |
+| `total` | `number` | Total number of matching results (before pagination) |
+| `limit` | `number` | The limit used for this request |
+| `offset` | `number` | The offset used for this request |
 
 **Examples**:
 
 ```bash
-# List all children
+# List all children (default: newest first, limit 50)
 curl "http://localhost:8080/v1/MyDEX/children"
+
+# Paginate: second page of 10
+curl "http://localhost:8080/v1/MyDEX/children?limit=10&offset=10"
+
+# Sort by name ascending
+curl "http://localhost:8080/v1/MyDEX/children?order=name.asc"
 
 # Filter by metadata field
 curl "http://localhost:8080/v1/MyDEX/children?token0=eq.0xabc"
+
+# Combined: filter + sort + paginate
+curl "http://localhost:8080/v1/MyDEX/children?token1=eq.0xUSDC&order=deployment_block.asc&limit=20"
 ```
 
 ---
@@ -395,7 +444,7 @@ curl "http://localhost:8080/v1/MyDEX/children/count?token0=eq.0xabc"
 
 ### `GET /v1/discover/{classHash}/contracts`
 
-Returns contracts discovered via class hash watching for a specific class hash. Used when the indexer is configured to watch for deployments of a known class hash (task 3.9).
+Returns contracts discovered via class hash watching for a specific class hash. Used when the indexer is configured with [`discover`](CONFIGURATION.md#discover) blocks to watch for deployments of known class hashes.
 
 **Response** `200 OK`:
 
@@ -468,7 +517,7 @@ curl -N -H "Last-Event-ID: 850000:3" \
 
 ## Admin Endpoints
 
-Admin endpoints manage contracts dynamically at runtime. All admin endpoints require the `X-Admin-Key` header when `api.admin_key` is set in `ibis.config.yaml`. If no admin key is configured, all requests are allowed.
+Admin endpoints manage contracts dynamically at runtime. All admin endpoints require the `X-Admin-Key` header when [`api.admin_key`](CONFIGURATION.md#apiadmin_key) is set in `ibis.config.yaml`. If no admin key is configured, all requests are allowed.
 
 **Authentication Header**:
 
@@ -490,7 +539,7 @@ Register a new contract for indexing at runtime.
   "events": [
     {
       "name": "Transfer",
-      "table_type": "log"
+      "table": { "type": "log" }
     }
   ],
   "start_block": 850000
@@ -502,8 +551,10 @@ Register a new contract for indexing at runtime.
 | `name` | `string` | Yes | Unique contract name |
 | `address` | `string` | Yes | Starknet contract address |
 | `abi` | `string` | No | Path or URL to ABI file (auto-fetched if omitted) |
-| `events` | `array` | No | Event configurations |
+| `events` | `array` | No | Event configurations (see note below) |
 | `start_block` | `number` | No | Block to start indexing from |
+
+> **Event config format**: The API accepts two JSON formats for event configurations. The **nested format** matches the YAML config structure: `{"name": "Transfer", "table": {"type": "log"}}`. A **flat shorthand** is also accepted for convenience: `{"name": "Transfer", "table_type": "log", "unique_key": "account"}`. When both are present, the nested `table` field takes precedence. The flat shorthand supports `table_type` and `unique_key`; for aggregation config, use the nested format.
 
 **Response** `201 Created`:
 
@@ -518,6 +569,17 @@ Register a new contract for indexing at runtime.
 **Example**:
 
 ```bash
+# Using nested format (matches ibis.config.yaml structure)
+curl -X POST http://localhost:8080/v1/admin/contracts \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Key: your-secret-key" \
+  -d '{
+    "name": "NewToken",
+    "address": "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+    "events": [{"name": "Transfer", "table": {"type": "log"}}]
+  }'
+
+# Using flat shorthand
 curl -X POST http://localhost:8080/v1/admin/contracts \
   -H "Content-Type: application/json" \
   -H "X-Admin-Key: your-secret-key" \
@@ -541,19 +603,40 @@ List all contracts currently being indexed (both config-defined and dynamically 
   "contracts": [
     {
       "name": "MyToken",
-      "address": "0x...",
-      "events": [{"name": "Transfer", "table_type": "log"}]
+      "address": "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+      "events": 1,
+      "current_block": 850000,
+      "status": "active",
+      "dynamic": false
     },
     {
       "name": "NewToken",
-      "address": "0x...",
+      "address": "0x04270219d365d6b017231b52e92b3fb5d7c8378b05e9abc97724537a80e93b0f",
+      "events": 2,
+      "current_block": 849500,
+      "status": "syncing",
       "dynamic": true,
-      "events": [{"name": "Transfer", "table_type": "log"}]
+      "factory_name": "MyFactory"
     }
   ],
   "count": 2
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `contracts` | `array` | List of all registered contracts |
+| `contracts[].name` | `string` | Contract name from config or registration |
+| `contracts[].address` | `string` | Starknet contract address |
+| `contracts[].events` | `number` | Number of events being indexed for this contract |
+| `contracts[].current_block` | `number` | Last processed block for this contract |
+| `contracts[].start_block` | `number` | Block to start indexing from (omitted if 0) |
+| `contracts[].status` | `string` | Current status: `active`, `syncing`, `backfilling`, or `error` |
+| `contracts[].dynamic` | `boolean` | Whether the contract was dynamically registered (vs. config-defined) |
+| `contracts[].factory_name` | `string` | Name of the parent factory (omitted if not a factory child) |
+| `contracts[].factory_meta` | `object` | Metadata from factory discovery (omitted if not a factory child) |
+| `contracts[].is_factory` | `boolean` | Whether this contract is a factory (omitted if `false`) |
+| `count` | `number` | Total number of registered contracts |
 
 **Example**:
 
@@ -566,7 +649,7 @@ curl http://localhost:8080/v1/admin/contracts \
 
 ### `PUT /v1/admin/contracts/{name}`
 
-Update the configuration of an existing contract.
+Update the configuration of an existing contract. Internally, this deregisters the old contract and re-registers it with the new configuration — either step can fail independently.
 
 **Request Body** (`application/json`): Same structure as the register endpoint. Only provided fields are updated.
 
@@ -579,11 +662,35 @@ Update the configuration of an existing contract.
 }
 ```
 
-**Response** `404 Not Found`:
+**Response** `400 Bad Request` — invalid or malformed request body:
+
+```json
+{
+  "error": "invalid request body: unexpected EOF"
+}
+```
+
+**Response** `404 Not Found` — contract not registered:
 
 ```json
 {
   "error": "contract not found: UnknownContract"
+}
+```
+
+**Response** `500 Internal Server Error` — update failed during deregistration or re-registration (e.g., ABI resolution failure):
+
+```json
+{
+  "error": "update failed: deregistering old contract: ..."
+}
+```
+
+**Response** `503 Service Unavailable` — dynamic contract management is not available (engine not running):
+
+```json
+{
+  "error": "dynamic registration not available"
 }
 ```
 
@@ -670,6 +777,8 @@ curl "http://localhost:8080/v1/MyToken/Transfer?from=eq.0x1234"
 curl "http://localhost:8080/v1/MyToken/Transfer?from=0x1234"
 ```
 
+> **Note**: If the value contains a dot (`.`) separator, the prefix **must** be one of the operators listed above. An unrecognized prefix returns `400 Bad Request` with a descriptive error (e.g., `?from=invalid.0x1234` → `"invalid filter operator 'invalid' for field 'from'; valid operators: eq, neq, gt, gte, lt, lte"`). Values without a dot separator default to `eq` (e.g., `?from=0x1234`).
+
 ---
 
 ## Common Response Fields
@@ -708,11 +817,21 @@ All errors follow a consistent format:
 |--------|---------|------|
 | `200` | OK | Successful request |
 | `201` | Created | Contract successfully registered |
-| `400` | Bad Request | Invalid query parameter, malformed filter, invalid request body |
+| `400` | Bad Request | Invalid query parameter (e.g., unrecognized filter operator), invalid request body on admin endpoints, malformed JSON |
 | `401` | Unauthorized | Missing or invalid `X-Admin-Key` header |
 | `404` | Not Found | Unknown contract/event combination, no events found for `/latest`, unknown factory |
 | `500` | Internal Server Error | Database query failure or internal error |
-| `503` | Service Unavailable | Engine not available (admin/factory endpoints when dynamic management is disabled), SSE streaming not enabled |
+| `503` | Service Unavailable | Returned when a required subsystem is not running (see details below) |
+
+#### 503 Service Unavailable Details
+
+The `503` response means the endpoint depends on a subsystem that isn't active:
+
+- **Admin endpoints** (`/v1/admin/contracts/*`): Return `"dynamic registration not available"` when the indexing engine is not running. The engine is started by `ibis run` and enables dynamic contract registration, updates, and deregistration.
+- **Factory & Discover endpoints** (`/v1/{factory}/children`, `/v1/discover/{classHash}/contracts`): Return `"engine not available"` for the same reason — the engine tracks factory children and discovered contracts at runtime.
+- **SSE streaming** (`/v1/{contract}/{event}/stream`): Returns `"event streaming not available"` when the event bus is not initialized. The event bus is created by `ibis run` to relay live indexer events to SSE clients.
+
+In the standard CLI, `ibis run` starts both the engine and event bus, so these 503 responses should not occur during normal operation. They act as guards for programmatic use of ibis as a library (e.g., creating an API server without an engine).
 
 ---
 

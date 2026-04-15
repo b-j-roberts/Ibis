@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -690,6 +691,92 @@ contracts:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for bad calldata hex")
+	}
+}
+
+// --- EventConfig JSON UnmarshalJSON Tests ---
+
+func TestEventConfig_UnmarshalJSON_NestedFormat(t *testing.T) {
+	input := `{"name": "Transfer", "table": {"type": "log"}}`
+	var ec EventConfig
+	if err := json.Unmarshal([]byte(input), &ec); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if ec.Name != "Transfer" {
+		t.Errorf("Name = %q, want Transfer", ec.Name)
+	}
+	if ec.Table.Type != "log" {
+		t.Errorf("Table.Type = %q, want log", ec.Table.Type)
+	}
+}
+
+func TestEventConfig_UnmarshalJSON_FlatFormat(t *testing.T) {
+	input := `{"name": "Transfer", "table_type": "log"}`
+	var ec EventConfig
+	if err := json.Unmarshal([]byte(input), &ec); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if ec.Name != "Transfer" {
+		t.Errorf("Name = %q, want Transfer", ec.Name)
+	}
+	if ec.Table.Type != "log" {
+		t.Errorf("Table.Type = %q, want log", ec.Table.Type)
+	}
+}
+
+func TestEventConfig_UnmarshalJSON_FlatUniqueKey(t *testing.T) {
+	input := `{"name": "Balance", "table_type": "unique", "unique_key": "account"}`
+	var ec EventConfig
+	if err := json.Unmarshal([]byte(input), &ec); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if ec.Table.Type != "unique" {
+		t.Errorf("Table.Type = %q, want unique", ec.Table.Type)
+	}
+	if ec.Table.UniqueKey != "account" {
+		t.Errorf("Table.UniqueKey = %q, want account", ec.Table.UniqueKey)
+	}
+}
+
+func TestEventConfig_UnmarshalJSON_NestedTakesPrecedence(t *testing.T) {
+	// When both nested and flat are provided, nested wins.
+	input := `{"name": "Transfer", "table": {"type": "unique", "unique_key": "sender"}, "table_type": "log"}`
+	var ec EventConfig
+	if err := json.Unmarshal([]byte(input), &ec); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if ec.Table.Type != "unique" {
+		t.Errorf("Table.Type = %q, want unique (nested should take precedence)", ec.Table.Type)
+	}
+	if ec.Table.UniqueKey != "sender" {
+		t.Errorf("Table.UniqueKey = %q, want sender", ec.Table.UniqueKey)
+	}
+}
+
+func TestEventConfig_UnmarshalJSON_ContractConfigWithFlatEvents(t *testing.T) {
+	input := `{
+		"name": "NewToken",
+		"address": "0x123",
+		"events": [
+			{"name": "Transfer", "table_type": "log"},
+			{"name": "Balance", "table_type": "unique", "unique_key": "account"}
+		]
+	}`
+	var cc ContractConfig
+	if err := json.Unmarshal([]byte(input), &cc); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(cc.Events) != 2 {
+		t.Fatalf("Events count = %d, want 2", len(cc.Events))
+	}
+	if cc.Events[0].Table.Type != "log" {
+		t.Errorf("Events[0].Table.Type = %q, want log", cc.Events[0].Table.Type)
+	}
+	if cc.Events[1].Table.Type != "unique" {
+		t.Errorf("Events[1].Table.Type = %q, want unique", cc.Events[1].Table.Type)
+	}
+	if cc.Events[1].Table.UniqueKey != "account" {
+		t.Errorf("Events[1].Table.UniqueKey = %q, want account", cc.Events[1].Table.UniqueKey)
 	}
 }
 

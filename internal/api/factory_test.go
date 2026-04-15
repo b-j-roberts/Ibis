@@ -494,6 +494,237 @@ func TestFactoryAPI_NonExistentFactory(t *testing.T) {
 	}
 }
 
+// --- Pagination & Sorting Tests (Task 3.23) ---
+
+// Test: default response includes total, limit, offset fields
+func TestFactoryAPI_PaginationEnvelope(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	// Verify envelope fields.
+	for _, field := range []string{"data", "count", "total", "limit", "offset"} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("response missing field %q", field)
+		}
+	}
+
+	total := int(body["total"].(float64))
+	count := int(body["count"].(float64))
+	limit := int(body["limit"].(float64))
+	offset := int(body["offset"].(float64))
+
+	if total != 2 {
+		t.Errorf("expected total=2, got %d", total)
+	}
+	if count != 2 {
+		t.Errorf("expected count=2, got %d", count)
+	}
+	if limit != 50 { // defaultLimit
+		t.Errorf("expected limit=50, got %d", limit)
+	}
+	if offset != 0 {
+		t.Errorf("expected offset=0, got %d", offset)
+	}
+}
+
+// Test: limit restricts page size
+func TestFactoryAPI_PaginationLimit(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?limit=1")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("expected 1 child in page, got %d", len(data))
+	}
+	if int(body["count"].(float64)) != 1 {
+		t.Errorf("expected count=1, got %v", body["count"])
+	}
+	if int(body["total"].(float64)) != 2 {
+		t.Errorf("expected total=2, got %v", body["total"])
+	}
+}
+
+// Test: offset skips entries
+func TestFactoryAPI_PaginationOffset(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?limit=1&offset=1")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("expected 1 child in page, got %d", len(data))
+	}
+	if int(body["total"].(float64)) != 2 {
+		t.Errorf("expected total=2, got %v", body["total"])
+	}
+}
+
+// Test: offset beyond total returns empty data
+func TestFactoryAPI_PaginationOffsetBeyondTotal(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?offset=100")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	if len(data) != 0 {
+		t.Fatalf("expected 0 children when offset > total, got %d", len(data))
+	}
+	if int(body["count"].(float64)) != 0 {
+		t.Errorf("expected count=0, got %v", body["count"])
+	}
+	if int(body["total"].(float64)) != 2 {
+		t.Errorf("expected total=2, got %v", body["total"])
+	}
+}
+
+// Test: default sort is deployment_block.desc (newest first)
+func TestFactoryAPI_DefaultSortOrder(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	if len(data) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(data))
+	}
+
+	// c002 has start_block=105, c001 has start_block=100.
+	// desc order: c002 first, c001 second.
+	first := data[0].(map[string]any)
+	second := data[1].(map[string]any)
+	if first["name"] != "JediSwap_c002" {
+		t.Errorf("expected first child to be c002 (block 105), got %v", first["name"])
+	}
+	if second["name"] != "JediSwap_c001" {
+		t.Errorf("expected second child to be c001 (block 100), got %v", second["name"])
+	}
+}
+
+// Test: sort by deployment_block.asc
+func TestFactoryAPI_SortByDeploymentBlockAsc(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?order=deployment_block.asc")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	first := data[0].(map[string]any)
+	second := data[1].(map[string]any)
+	if first["name"] != "JediSwap_c001" {
+		t.Errorf("expected first child c001 (block 100) in asc order, got %v", first["name"])
+	}
+	if second["name"] != "JediSwap_c002" {
+		t.Errorf("expected second child c002 (block 105) in asc order, got %v", second["name"])
+	}
+}
+
+// Test: sort by name.asc
+func TestFactoryAPI_SortByName(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?order=name.asc")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	first := data[0].(map[string]any)
+	if first["name"] != "JediSwap_c001" {
+		t.Errorf("expected first child c001 in name.asc order, got %v", first["name"])
+	}
+}
+
+// Test: sort by status
+func TestFactoryAPI_SortByStatus(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	// Both children have same status, so just verify no error.
+	status, _ := factoryGet(t, ts, "/v1/JediSwap/children?order=status.asc")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+}
+
+// Test: combined filter + pagination
+func TestFactoryAPI_FilterWithPagination(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	// Filter to 1 child + limit=1 → count=1, total=1
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?token0=0xETH&limit=1")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(data))
+	}
+	if int(body["total"].(float64)) != 1 {
+		t.Errorf("expected total=1 after filter, got %v", body["total"])
+	}
+	child := data[0].(map[string]any)
+	if child["token0"] != "0xETH" {
+		t.Errorf("expected token0=0xETH, got %v", child["token0"])
+	}
+}
+
+// Test: empty result when filter matches nothing
+func TestFactoryAPI_EmptyFilterResult(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?token0=0xNONEXISTENT")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	if len(data) != 0 {
+		t.Fatalf("expected 0 children, got %d", len(data))
+	}
+	if int(body["total"].(float64)) != 0 {
+		t.Errorf("expected total=0, got %v", body["total"])
+	}
+	if int(body["count"].(float64)) != 0 {
+		t.Errorf("expected count=0, got %v", body["count"])
+	}
+}
+
+// Test: sort by metadata field
+func TestFactoryAPI_SortByMetadataField(t *testing.T) {
+	ts, _ := setupFactoryTestServer(t)
+
+	status, body := factoryGet(t, ts, "/v1/JediSwap/children?order=token0.asc")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	data := body["data"].([]any)
+	// 0xDAI < 0xETH alphabetically.
+	first := data[0].(map[string]any)
+	if first["token0"] != "0xDAI" {
+		t.Errorf("expected first child to have token0=0xDAI in asc order, got %v", first["token0"])
+	}
+}
+
 // Test: filter defaults to eq
 func TestFactoryAPI_FilterDefaultsToEq(t *testing.T) {
 	ts, _ := setupFactoryTestServer(t)

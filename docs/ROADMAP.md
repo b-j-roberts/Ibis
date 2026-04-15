@@ -583,6 +583,28 @@
 - Keep the tone practical and example-driven. Users should be able to scan the example prompts and immediately understand what each skill does.
 - The comparison table is important — it prevents confusion about when to use a skill vs the CLI vs direct API calls. Skills are best for exploration and one-off tasks; CLI for scripts and pipelines; API for application code.
 
+### 3.23 Factory Children Pagination
+
+**Description**: Add `limit`, `offset`, and `order` support to the factory children endpoint (`GET /v1/{factory}/children`). Currently, this endpoint returns all children at once with no pagination, which is inconsistent with the event list endpoints and will cause performance issues for factories with hundreds or thousands of children (e.g., a DEX factory with many trading pairs). The `/children/count` endpoint should also return the total (pre-pagination) count to support client-side pagination UIs.
+
+**Requirements**:
+- [ ] Parse `limit`, `offset`, and `order` query params in `handleFactoryChildren` (reuse existing `parseQuery` from `query.go`)
+- [ ] Apply in-memory sorting on the filtered children slice (support `name`, `deployment_block`, `current_block`, `status`, and metadata fields)
+- [ ] Default sort: `deployment_block.desc` (newest children first)
+- [ ] Apply offset/limit slicing after filtering and sorting
+- [ ] Return `listResponse`-style envelope: `{"data": [...], "count": N, "total": T, "limit": L, "offset": O}` where `count` is page size and `total` is total matching (pre-pagination) count
+- [ ] Cap `limit` at `maxLimit` (500) and default to `defaultLimit` (50), matching event endpoints
+- [ ] Update `handleFactoryChildCount` to remain unchanged (it already returns total count with filters)
+- [ ] Add tests for pagination, sorting, offset beyond total, empty results, and combined filter+pagination
+- [ ] Update `docs/API-REFERENCE.md` factory children section to document the new query parameters
+
+**Implementation Notes**:
+- The factory children data comes from `engine.FactoryChildren()` which returns `[]ContractInfo` from in-memory state — pagination is purely an API-layer concern. No changes to the engine or store interface needed.
+- Replace `parseFiltersFromURL(r)` with `parseQuery(r)` in `handleFactoryChildren` to get limit/offset/order for free, then extract filters from the query.
+- For sorting: use `slices.SortFunc` with a comparator that handles the `order` field. Metadata fields (promoted from `FactoryMeta`) are `any` type — compare as strings via `fmt.Sprint` for metadata fields, typed comparison for known fields (`deployment_block`, `current_block` as `uint64`).
+- The response envelope adds a `total` field not present in `listResponse`. Either extend `listResponse` or use a custom struct for factory children. Prefer a custom struct to avoid breaking existing event endpoints.
+- Edge cases: `offset >= total` should return empty `data` with the correct `total`; `limit=0` or negative should use the default.
+
 ---
 
 ## Phase 4: Future

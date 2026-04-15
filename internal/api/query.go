@@ -82,23 +82,29 @@ func parseFiltersFromURL(r *http.Request) ([]store.Filter, error) {
 
 // parseFilterParam parses "op.value" format into a Filter.
 // e.g., field "block_number" with value "gte.100000" -> {Field: "block_number", Operator: "gte", Value: "100000"}.
-// When no valid operator prefix is found, defaults to "eq" with the raw value.
-// This enables simple filters like ?contract_address=0x123 without the eq. prefix.
-func parseFilterParam(field, value string) (store.Filter, error) { //nolint:unparam // error kept for future validation
+// Values without a dot separator default to "eq" (e.g., ?from=0x123).
+// Values with a dot separator whose prefix is not a valid operator return an error.
+func parseFilterParam(field, value string) (store.Filter, error) {
 	validOps := map[string]bool{
 		"eq": true, "neq": true, "gt": true, "gte": true, "lt": true, "lte": true,
 	}
 
 	parts := strings.SplitN(value, ".", 2)
-	if len(parts) == 2 && validOps[parts[0]] {
-		return store.Filter{
-			Field:    field,
-			Operator: parts[0],
-			Value:    parts[1],
-		}, nil
+	if len(parts) == 2 {
+		if validOps[parts[0]] {
+			return store.Filter{
+				Field:    field,
+				Operator: parts[0],
+				Value:    parts[1],
+			}, nil
+		}
+		return store.Filter{}, fmt.Errorf(
+			"invalid filter operator '%s' for field '%s'; valid operators: eq, neq, gt, gte, lt, lte",
+			parts[0], field,
+		)
 	}
 
-	// No valid operator prefix: default to equality filter.
+	// No dot separator: default to equality filter.
 	return store.Filter{
 		Field:    field,
 		Operator: "eq",

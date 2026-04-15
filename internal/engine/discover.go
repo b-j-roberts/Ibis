@@ -580,7 +580,7 @@ func (e *Engine) DiscoveredContractsByClassHash(classHash string) []ContractInfo
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	var filtered []ContractInfo
+	filtered := []ContractInfo{}
 	for _, cs := range e.contracts {
 		if cs.config.DiscoverClassHash != classHash {
 			continue

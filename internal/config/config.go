@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -152,6 +153,40 @@ type DiscoverConfig struct {
 type EventConfig struct {
 	Name  string      `yaml:"name" json:"name"`
 	Table TableConfig `yaml:"table" json:"table"`
+}
+
+// UnmarshalJSON supports both nested and flat JSON formats for EventConfig.
+// Nested (matches YAML structure): {"name": "Transfer", "table": {"type": "log"}}
+// Flat (API shorthand):            {"name": "Transfer", "table_type": "log"}
+// When both are present, the nested "table" field takes precedence.
+func (e *EventConfig) UnmarshalJSON(data []byte) error {
+	type alias EventConfig
+	var nested alias
+	if err := json.Unmarshal(data, &nested); err != nil {
+		return err
+	}
+	*e = EventConfig(nested)
+
+	// If the nested table.type is already set, we're done.
+	if e.Table.Type != "" {
+		return nil
+	}
+
+	// Check for flat shorthand fields.
+	var flat struct {
+		TableType string `json:"table_type"`
+		UniqueKey string `json:"unique_key"`
+	}
+	if err := json.Unmarshal(data, &flat); err == nil {
+		if flat.TableType != "" {
+			e.Table.Type = flat.TableType
+		}
+		if flat.UniqueKey != "" && e.Table.UniqueKey == "" {
+			e.Table.UniqueKey = flat.UniqueKey
+		}
+	}
+
+	return nil
 }
 
 type TableConfig struct {
