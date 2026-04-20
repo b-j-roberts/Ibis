@@ -415,17 +415,17 @@ func TestGenerateCreateTableSQL_LogTable(t *testing.T) {
 	}
 
 	// Check column types.
-	if !strings.Contains(sql, "block_number BIGINT") {
-		t.Fatal("expected block_number BIGINT")
+	if !strings.Contains(sql, `"block_number" BIGINT`) {
+		t.Fatal("expected quoted block_number BIGINT")
 	}
-	if !strings.Contains(sql, "transaction_hash TEXT") {
-		t.Fatal("expected transaction_hash TEXT")
+	if !strings.Contains(sql, `"transaction_hash" TEXT`) {
+		t.Fatal("expected quoted transaction_hash TEXT")
 	}
-	if !strings.Contains(sql, "amount BIGINT") {
-		t.Fatal("expected amount BIGINT")
+	if !strings.Contains(sql, `"amount" BIGINT`) {
+		t.Fatal("expected quoted amount BIGINT")
 	}
-	if !strings.Contains(sql, "is_active BOOLEAN") {
-		t.Fatal("expected is_active BOOLEAN")
+	if !strings.Contains(sql, `"is_active" BOOLEAN`) {
+		t.Fatal("expected quoted is_active BOOLEAN")
 	}
 
 	// Standard indices.
@@ -461,8 +461,8 @@ func TestGenerateCreateTableSQL_UniqueTable(t *testing.T) {
 
 	sql := GenerateCreateTableSQL(schema)
 
-	if !strings.Contains(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_game_leaderboard_unique_player_address ON game_leaderboard (player_address)") {
-		t.Fatal("expected unique index on player_address")
+	if !strings.Contains(sql, `CREATE UNIQUE INDEX IF NOT EXISTS idx_game_leaderboard_unique_player_address ON game_leaderboard ("player_address")`) {
+		t.Fatal("expected unique index on quoted player_address")
 	}
 }
 
@@ -483,11 +483,11 @@ func TestGenerateAggregationTableSQL(t *testing.T) {
 	if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS dex_volume_agg") {
 		t.Fatal("expected aggregation table")
 	}
-	if !strings.Contains(sql, "total_volume DOUBLE PRECISION") {
-		t.Fatal("expected total_volume as DOUBLE PRECISION")
+	if !strings.Contains(sql, `"total_volume" DOUBLE PRECISION`) {
+		t.Fatal("expected quoted total_volume as DOUBLE PRECISION")
 	}
-	if !strings.Contains(sql, "trade_count BIGINT") {
-		t.Fatal("expected trade_count as BIGINT for count operation")
+	if !strings.Contains(sql, `"trade_count" BIGINT`) {
+		t.Fatal("expected quoted trade_count as BIGINT for count operation")
 	}
 }
 
