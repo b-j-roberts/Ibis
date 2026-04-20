@@ -44,7 +44,7 @@ func GenerateCreateTableSQL(schema *types.TableSchema) string {
 		if !col.Nullable && (col.Name == "block_number" || col.Name == "log_index") {
 			nullable = " NOT NULL"
 		}
-		b.WriteString(fmt.Sprintf("    \"%s\" %s%s", col.Name, pgType, nullable))
+		b.WriteString(fmt.Sprintf("    %s %s%s", qid(col.Name), pgType, nullable))
 		if i < len(schema.Columns)-1 {
 			b.WriteString(",")
 		}

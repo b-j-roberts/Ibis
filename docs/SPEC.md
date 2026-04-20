@@ -244,6 +244,7 @@ indexer:
   start_block: 0                        # 0 = genesis block. Omit to start from latest
   pending_blocks: true                  # Index pre-confirmed blocks
   batch_size: 10                        # Blocks per batch for backfill
+  transport: http                       # Optional: "http" forces HTTP polling, "wss" forces WebSocket. Omit for auto (try WSS, fallback to HTTP)
   udc_address: "0x04a64cd09..."         # Universal Deployer Contract address (auto-set for mainnet/sepolia)
   udc_event:                            # Optional UDC event format override
     version: auto                       # "auto", "v0" (Cairo 0), or "v1" (modern Cairo)
@@ -336,9 +337,9 @@ The core orchestrator that coordinates event processing. Unlike block-scanning i
 
 1. **Startup**: Resolve ABIs, compute event selectors, load persisted dynamic contracts from store, determine per-contract starting block from cursor, set up view poller and discovery state
 2. **Backfill** (if behind): Use `starknet_getEvents` HTTP RPC with continuation tokens to catch up in chunks
-3. **Stream**: Subscribe to `starknet_subscribeEvents` per contract via WSS, starting from each contract's cursor
+3. **Stream**: Subscribe to `starknet_subscribeEvents` per contract via WSS, starting from each contract's cursor. If `transport: http` is configured, skip WSS and use HTTP polling directly.
 4. **Process**: For each received event, match selector, decode via ABI, generate operation pairs, write to store. Factory events are routed to child registration. UDC events are routed to discovery handling.
-5. **Fallback**: If WSS fails, fall back to `starknet_getEvents` polling loop (adaptive timing: 100ms during catchup, 2s at chain tip)
+5. **Fallback**: If WSS fails (and `transport` is not set to `wss`), fall back to `starknet_getEvents` polling loop (adaptive timing: 100ms during catchup, 2s at chain tip)
 6. **Reorg**: If the WSS subscription delivers reorg notifications, execute revert operations for orphaned data. Deregister factory children and discovered contracts deployed within reverted block range.
 7. **Dynamic contracts**: Contracts can be registered/deregistered at runtime via the admin API. The engine resolves ABIs, builds schemas, creates tables, persists the config, and spawns subscriptions on the fly.
 

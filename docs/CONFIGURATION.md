@@ -24,6 +24,7 @@ Complete reference for `ibis.config.yaml`. This document covers every field, its
   - [indexer.start_block](#indexerstart_block)
   - [indexer.pending_blocks](#indexerpending_blocks)
   - [indexer.batch_size](#indexerbatch_size)
+  - [indexer.transport](#indexertransport)
   - [indexer.udc_address](#indexerudc_address)
   - [indexer.udc_event](#indexerudc_event)
 - [Contracts](#contracts)
@@ -277,6 +278,22 @@ Number of blocks per batch during historical backfill. Larger values reduce RPC 
 ```yaml
 indexer:
   batch_size: 50
+```
+
+### `indexer.transport`
+
+| Property | Value |
+|----------|-------|
+| Type | `string` |
+| Required | No |
+| Default | *(empty — auto)* |
+| Values | `wss`, `http` |
+
+Controls the event subscription transport. By default (omitted or empty), ibis tries WSS (`starknet_subscribeEvents`) and falls back to HTTP polling (`starknet_getEvents`) if WSS fails. Set to `http` to force HTTP polling directly — useful when the RPC node doesn't support WebSocket subscriptions or when operating behind an HTTP-only proxy.
+
+```yaml
+indexer:
+  transport: http
 ```
 
 ### `indexer.udc_address`
@@ -843,6 +860,7 @@ The following constraints are enforced when the config is loaded:
 | Discover `class_hash` must be unique across all entries | `class_hash: duplicate class hash` |
 | Discover `group` must be lowercase alphanumeric with hyphens only | `group: must be lowercase alphanumeric with hyphens only` |
 | Discover with `shared_tables: true` requires a named ABI (not `fetch` or file path) | `abi: must be a named ABI...` |
+| `transport` must be `wss`, `http`, or omitted | `indexer.transport: must be one of: wss, http (or omit for auto)` |
 | `udc_address` must be valid `0x`-prefixed hex | `indexer.udc_address: must start with 0x` |
 | `udc_event.version` must be `auto`, `v0`, or `v1` | `udc_event.version: must be one of: auto, v0, v1` |
 | `udc_event` fine-grained overrides not allowed with explicit `v0`/`v1` | `fine-grained overrides are not allowed when version is explicitly v0 or v1` |

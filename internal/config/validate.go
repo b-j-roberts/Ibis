@@ -35,6 +35,12 @@ var validAggOps = map[string]bool{
 	"avg":   true,
 }
 
+var validTransports = map[string]bool{
+	"":     true, // default: try WSS, fallback to HTTP
+	"wss":  true, // WebSocket only
+	"http": true, // HTTP polling only
+}
+
 // Validate checks the Config for required fields, valid enum values,
 // and contract address format. Returns the first error found.
 func Validate(cfg *Config) error {
@@ -67,6 +73,10 @@ func Validate(cfg *Config) error {
 		if cfg.Database.Postgres.Name == "" {
 			return fieldError("database.postgres.name", "required when backend is postgres")
 		}
+	}
+
+	if !validTransports[cfg.Indexer.Transport] {
+		return fieldError("indexer.transport", "must be one of: wss, http (or omit for auto)")
 	}
 
 	if cfg.Indexer.UDCAddress != "" {
