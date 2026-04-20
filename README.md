@@ -4,24 +4,24 @@
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![CI](https://github.com/b-j-roberts/ibis/actions/workflows/ci.yml/badge.svg)](https://github.com/b-j-roberts/ibis/actions/workflows/ci.yml)
 
-A fast, easy-to-use Starknet event indexer written in Go. One config file, one command, fully typed APIs.
-
-Ibis is a general-purpose Starknet indexer that generates typed database tables and REST APIs directly from contract ABIs, and launches with a single command from a YAML config file.
+A fast, easy-to-use Starknet event indexer. One config file, one command, fully typed database tables and REST APIs -- all generated from contract ABIs.
 
 ## Features
 
-- **ABI-driven schemas** -- contract ABIs drive table creation, REST endpoints, and type safety
-- **One config, one command** -- `ibis.config.yaml` + `ibis run` is all you need
-- **Real-time streaming** -- SSE event streaming with reconnection replay via `Last-Event-ID`
-- **Multiple DB backends** -- PostgreSQL, BadgerDB (embedded), or in-memory (dev/test)
-- **Auto-generated REST API** -- Supabase-style query syntax with pagination, filtering, ordering
-- **Reorg handling** -- revert/add operation pairs for safe pending block support
+- **ABI-driven** -- contract ABIs drive table creation, column types, REST endpoints, and query execution
+- **One config, one command** -- define contracts in `ibis.config.yaml`, run `ibis run`
+- **Real-time streaming** -- SSE with reconnection replay via `Last-Event-ID`
+- **Three database backends** -- PostgreSQL (production), BadgerDB (embedded), in-memory (dev/test)
+- **Auto-generated REST API** -- Supabase-style filtering, pagination, and ordering
+- **Reorg-safe** -- every write produces an `(add, revert)` operation pair for pending block support
 - **Backfill** -- automatic historical event catchup on startup via `starknet_getEvents`
 - **Wildcard events** -- index all contract events with `name: "*"`, override specific ones as needed
-- **Three table types** -- `log` (append-only), `unique` (last-write-wins), `aggregation` (auto-computed)
-- **Factory contracts** -- automatic child contract discovery, dynamic registration, and shared tables
-- **Dynamic contract management** -- register, deregister, and update contracts at runtime via admin API
-- **CLI queries** -- query indexed data directly from the terminal in JSON, table, or CSV format
+- **Three table types** -- `log` (append-only), `unique` (last-write-wins by key), `aggregation` (auto-computed sums/counts)
+- **Factory contracts** -- automatic child contract discovery with shared tables
+- **Class-hash discovery** -- watch the UDC for new deployments matching a class hash
+- **View function polling** -- periodically call contract view functions and store results
+- **Dynamic management** -- register, deregister, and update contracts at runtime via admin API
+- **CLI queries** -- query indexed data from the terminal in JSON, table, or CSV format
 
 ## Installation
 
@@ -35,7 +35,7 @@ asdf set -u ibis latest
 
 ### Binary release
 
-Download the latest binary from [GitHub Releases](https://github.com/b-j-roberts/ibis/releases):
+Download from [GitHub Releases](https://github.com/b-j-roberts/ibis/releases):
 
 ```bash
 # macOS (Apple Silicon)
@@ -50,64 +50,27 @@ sudo mv ibis /usr/local/bin/
 ### Build from source
 
 ```bash
-git clone https://github.com/b-j-roberts/ibis.git
-cd ibis
+git clone https://github.com/b-j-roberts/ibis.git && cd ibis
 make build
 # Binary at ./bin/ibis
 ```
 
-### Agent skills
-
-Ibis ships with [agent skills](https://github.com/vercel-labs/skills) for config generation and natural language querying:
-
-```bash
-# Install all ibis skills
-npx skills add b-j-roberts/ibis
-
-# Or install individually
-npx skills add b-j-roberts/ibis --skill ibis-config
-npx skills add b-j-roberts/ibis --skill ibis-query
-```
-
 ## Quick Start
 
-### 1. Initialize a config
-
 ```bash
-ibis init --contract 0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7
-```
+# 1. Generate a config from a contract address
+ibis init --contract 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d
 
-This fetches the contract ABI, lists available events, and generates an `ibis.config.yaml`.
-
-### 2. Run the indexer
-
-```bash
+# 2. Start indexing
 ibis run
+
+# 3. Query data
+ibis query STRK Transfer --limit 5 --format table
 ```
 
-Ibis connects to the Starknet RPC, subscribes to events, decodes them using the ABI, writes them to the configured database, and exposes a REST API.
+The `init` command fetches the contract ABI, lists available events, and generates an `ibis.config.yaml`. The `run` command connects to Starknet, subscribes to events, decodes them, writes to the database, and serves a REST API.
 
-### 3. Query data
-
-```bash
-# Via CLI
-ibis query MyContract Transfer --limit 10 --format table
-
-# List all available tables
-ibis query --list
-
-# Via REST API
-curl "http://localhost:8080/v1/MyContract/Transfer?limit=10&order=block_number.desc"
-
-# With filters
-curl "http://localhost:8080/v1/MyContract/Transfer?sender=eq.0x123&block_number=gte.100000"
-
-# Real-time streaming
-curl "http://localhost:8080/v1/MyContract/Transfer/stream"
-
-# Factory children
-curl "http://localhost:8080/v1/MyFactory/children"
-```
+For a full walkthrough, see the [Getting Started Guide](docs/GETTING-STARTED.md).
 
 ## Configuration
 
@@ -128,125 +91,116 @@ api:
   host: 0.0.0.0
   port: 8080
   cors_origins: ["*"]
-  admin_key: ${IBIS_ADMIN_KEY}   # Optional: protects admin endpoints
+  admin_key: ${IBIS_ADMIN_KEY}
 
 indexer:
-  start_block: 0        # 0 = genesis block. Omit to start from latest
+  start_block: 0
   pending_blocks: true
   batch_size: 10
 
 contracts:
-  - name: MyContract
-    address: "0x049d36570d4e46..."
-    abi: fetch                  # fetch from chain, or local path
+  - name: MyToken
+    address: "0x04718f5a0fc..."
+    abi: fetch
     events:
-      - name: "*"               # Index all events as log tables
+      - name: "*"
         table:
           type: log
-      - name: LeaderboardUpdate # Override specific events
+      - name: Transfer
         table:
           type: unique
-          unique_key: trader_address
+          unique_key: sender
 
   - name: MyFactory
     address: "0x..."
     abi: fetch
     factory:
-      event: PairCreated              # Event emitted when children are deployed
-      child_address_field: pair       # Field containing child contract address
-      child_abi: fetch                # ABI resolution for child contracts
-      shared_tables: true             # All children write to shared event tables
-      child_name_template: "{factory}_{short_address}"
+      event: PairCreated
+      child_address_field: pair
+      child_abi: fetch
+      shared_tables: true
       child_events:
         - name: Swap
           table:
             type: log
 ```
 
-See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for the full configuration reference, or [`configs/ibis.config.yaml`](configs/ibis.config.yaml) for a documented example.
+Environment variables are expanded with `${VAR_NAME}` syntax. See the [Configuration Reference](docs/CONFIGURATION.md) for all options, or [`configs/ibis.config.yaml`](configs/ibis.config.yaml) for a fully annotated example.
 
 ## CLI
 
 ```
-ibis init       Scaffold a config by inspecting contracts on-chain
-ibis run        Start the indexer
-ibis query      Query indexed data from the terminal
+ibis init     Scaffold a config by inspecting contracts on-chain
+ibis run      Start the indexer
+ibis query    Query indexed data from the terminal
 ```
 
-### `ibis init`
+**`ibis init`** -- generates `ibis.config.yaml` from contract addresses:
 
-| Flag | Description |
-|------|-------------|
-| `--contract` | Contract address(es) to index (repeatable) |
-| `--output` | Output path (default: `./ibis.config.yaml`) |
-| `--network` | Network: `mainnet`, `sepolia`, or `custom` |
-| `--rpc` | RPC endpoint URL |
-| `--database` | Backend: `memory`, `badger`, or `postgres` |
-| `--non-interactive` | Skip interactive prompts |
+```bash
+ibis init --contract 0x... --network mainnet --database postgres
+```
 
-### `ibis query [contract] [event]`
+**`ibis query`** -- query data from the terminal:
 
-| Flag | Description |
-|------|-------------|
-| `--limit` | Max results (default: 50) |
-| `--offset` | Skip first N results |
-| `--order` | Ordering, e.g. `block_number.desc` |
-| `--filter` | Field filter, e.g. `sender=eq.0x123` (repeatable) |
-| `--unique` | Query unique table entries |
-| `--aggregate` | Query aggregation results |
-| `--latest` | Return only most recent event |
-| `--count` | Return count of matching events |
-| `--children` | List factory child contracts |
-| `--children-count` | Count factory child contracts |
-| `--contract-address` | Filter by contract address (factory shared tables) |
-| `--format` | Output format: `json`, `table`, or `csv` |
-| `--list` | List all available tables/events |
+```bash
+ibis query MyToken Transfer --limit 10 --format table
+ibis query MyToken Transfer --filter "sender=eq.0x123" --order block_number.desc
+ibis query --list                          # List all available tables
+```
 
-## API
+See the [CLI Reference](docs/CLI-REFERENCE.md) for all flags and options.
+
+## REST API
 
 Ibis auto-generates REST endpoints from your contract ABI:
 
 ```
-GET  /v1/{contract}/{event}              # List events (paginated)
-GET  /v1/{contract}/{event}/latest       # Latest event
-GET  /v1/{contract}/{event}/count        # Count events
-GET  /v1/{contract}/{event}/unique       # Unique table entries
-GET  /v1/{contract}/{event}/aggregate    # Aggregated values
-GET  /v1/{contract}/{event}/stream       # SSE real-time stream
+GET  /v1/{contract}/{event}              List events (paginated)
+GET  /v1/{contract}/{event}/latest       Latest event
+GET  /v1/{contract}/{event}/count        Event count
+GET  /v1/{contract}/{event}/unique       Unique table entries
+GET  /v1/{contract}/{event}/aggregate    Aggregated values
+GET  /v1/{contract}/{event}/stream       SSE real-time stream
 ```
 
-### Factory endpoints
+**Query parameters** follow Supabase conventions:
 
-```
-GET  /v1/{factory}/children              # List child contracts
-GET  /v1/{factory}/children/count        # Count child contracts
-```
+```bash
+# Pagination and ordering
+curl "localhost:8080/v1/MyToken/Transfer?limit=10&offset=0&order=block_number.desc"
 
-### Admin endpoints
+# Filtering (eq, neq, gt, gte, lt, lte)
+curl "localhost:8080/v1/MyToken/Transfer?sender=eq.0x123&block_number=gte.100000"
 
-Dynamic contract management at runtime (protected by `admin_key` when configured):
-
-```
-POST   /v1/admin/contracts               # Register new contract
-GET    /v1/admin/contracts               # List all contracts
-PUT    /v1/admin/contracts/{name}        # Update contract
-DELETE /v1/admin/contracts/{name}        # Deregister contract
+# Real-time streaming
+curl "localhost:8080/v1/MyToken/Transfer/stream"
 ```
 
-### System endpoints
+**Factory endpoints:**
 
 ```
-GET  /v1/health                          # Health check
-GET  /v1/status                          # Indexer status
+GET  /v1/{factory}/children              List child contracts
+GET  /v1/{factory}/children/count        Count child contracts
 ```
 
-### Query parameters
+**Admin endpoints** (protected by `admin_key` when configured):
 
-Query parameters follow Supabase conventions:
+```
+POST   /v1/admin/contracts               Register a contract
+GET    /v1/admin/contracts               List all contracts
+PUT    /v1/admin/contracts/{name}        Update a contract
+DELETE /v1/admin/contracts/{name}        Deregister a contract
+```
 
-- `?limit=50&offset=0` -- pagination
-- `?order=block_number.desc` -- ordering
-- `?field=eq.value` -- filtering (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`)
+**System endpoints:**
+
+```
+GET  /v1/health                          Health check
+GET  /v1/status                          Indexer status
+```
+
+See the [API Reference](docs/API-REFERENCE.md) for full documentation.
 
 ## Architecture
 
@@ -288,22 +242,52 @@ Query parameters follow Supabase conventions:
                        +-----------------------+
 ```
 
-For a deep dive into the architecture, data models, and design decisions, see [`docs/SPEC.md`](docs/SPEC.md).
+For a deep dive into the architecture, data models, and design decisions, see the [Specification](docs/SPEC.md).
 
 ## Docker
 
 ```bash
-# Build and run
+# Build and run standalone
 make docker-build
 make docker-run
 
 # Or with docker-compose (includes PostgreSQL)
+cp .env.example .env   # Edit with your values
 make docker-compose-up
 ```
 
+See the [Deployment Guide](docs/DEPLOYMENT.md) for production deployment patterns.
+
+## Agent Skills
+
+Ibis ships with [Claude Code skills](docs/AGENT-SKILLS.md) for AI-powered config generation and natural language querying:
+
+```bash
+npx skills add b-j-roberts/ibis
+```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Getting Started](docs/GETTING-STARTED.md) | Installation and first indexer walkthrough |
+| [Configuration](docs/CONFIGURATION.md) | Full YAML config reference |
+| [API Reference](docs/API-REFERENCE.md) | REST API endpoints and query parameters |
+| [CLI Reference](docs/CLI-REFERENCE.md) | All CLI commands and flags |
+| [Table Types](docs/TABLE-TYPES.md) | Guide to log, unique, and aggregation tables |
+| [SSE Streaming](docs/SSE-STREAMING.md) | Real-time event streaming |
+| [Advanced Features](docs/ADVANCED-FEATURES.md) | Factory contracts, discovery, view polling |
+| [Deployment](docs/DEPLOYMENT.md) | Production deployment guide |
+| [Specification](docs/SPEC.md) | Architecture and design decisions |
+| [Roadmap](docs/ROADMAP.md) | Planned features and development phases |
+
 ## Contributing
 
-Contributions are welcome. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for planned work and [`docs/SPEC.md`](docs/SPEC.md) for architecture details.
+Contributions are welcome. See the [Roadmap](docs/ROADMAP.md) for planned work and the [Specification](docs/SPEC.md) for architecture context.
+
+```bash
+make check   # Run fmt, vet, lint, and tests
+```
 
 ## License
 
